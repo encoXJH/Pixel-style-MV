@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "style_name": "pixel-narrative-mv",
+  "seed": 20261027,
+  "render": {
+    "fps": 30,
+    "low_width": 480,
+    "low_height": 270,
+    "scale": 4,
+    "width": 1920,
+    "height": 1080,
+    "crf": 14,
+    "preset": "medium",
+    "pixel_format": "yuv420p",
+    "audio_bitrate": "256k",
+    "audio_sample_rate": 48000
+  },
+  "timing": {
+    "max_sync_ms": 50,
+    "beat_snap_window_ms": 50,
+    "min_shot_seconds": 0.6,
+    "max_shot_seconds": 8.0,
+    "subtitle_tail_seconds": 0.12,
+    "pose_fps": 12
+  },
+  "palette": {
+    "cream": "#F4EBDD",
+    "ink": "#25232A",
+    "indigo": "#20264A",
+    "amber": "#F2B35D",
+    "coral": "#E9786B",
+    "leaf": "#7FA66A",
+    "sky": "#6E9FC5",
+    "red": "#C94A4A",
+    "sea": "#3F6F8E",
+    "mint": "#9BC1A5",
+    "wood": "#8A5F45",
+    "pink": "#E7A2B4",
+    "violet": "#51456F",
+    "warm_white": "#FFF9F0",
+    "gray": "#6C7180",
+    "black": "#17151C",
+    "yellow": "#F2D16B",
+    "blue": "#355C9A",
+    "green": "#3F7658"
+  },
+  "subtitle": {
+    "band_height": 160,
+    "background": "cream",
+    "text_color": "ink",
+    "accent_color": "red",
+    "font_size": 42,
+    "max_lines": 2,
+    "max_chars_per_line": 24,
+    "line_spacing": 12,
+    "margin_x": 120,
+    "margin_y": 28,
+    "safe_margin": 48,
+    "min_contrast": 4.5,
+    "note": "♪"
+  },
+  "filters": {
+    "default": {"overlay": null, "strength": 0.0, "dither": 0.06, "vignette": 0.0},
+    "memory": {"overlay": "amber", "strength": 0.08, "dither": 0.08, "vignette": 0.06},
+    "rain_night": {"overlay": "indigo", "strength": 0.18, "dither": 0.1, "vignette": 0.08},
+    "dawn": {"overlay": "coral", "strength": 0.08, "dither": 0.06, "vignette": 0.03},
+    "stage": {"overlay": "violet", "strength": 0.12, "dither": 0.1, "vignette": 0.08}
+  },
+  "dynamics": {
+    "rain_drops": 36,
+    "parallax_pixels": 2,
+    "particle_count": 24,
+    "blink_frames": 2,
+    "pose_hold_frames": 3
+  },
+  "transitions": {
+    "hard_cut": {"duration_frames": 0},
+    "white_flash": {"duration_frames": 4, "max_per_video": 2},
+    "iris_out": {"duration_frames": 18, "ending_only": true},
+    "scroll_wipe": {"duration_frames": 12, "max_per_video": 1}
+  },
+  "characters": {
+    "protagonist": {"hair": "ink", "coat": "cream", "trousers": "indigo", "accent": "red", "height_pixels": 48},
+    "companion": {"hair": "wood", "coat": "coral", "trousers": "blue", "accent": "cream", "height_pixels": 46},
+    "cat": {"body": "amber", "accent": "cream", "height_pixels": 16}
+  },
+  "scenes": {
+    "campus": {
+      "keywords": ["学校", "校园", "教室", "同桌", "下课", "毕业", "课桌", "校服", "课堂", "school", "campus", "classroom", "graduation"],
+      "palette": ["cream", "leaf", "sky", "wood", "coral", "ink"],
+      "props": ["letter", "bicycle", "guitar"],
+      "filter": "memory"
+    },
+    "bedroom": {
+      "keywords": ["房间", "卧室", "床", "窗", "家", "回家", "失眠", "梦里", "room", "home", "bed", "window", "dream"],
+      "palette": ["cream", "wood", "mint", "amber", "indigo", "ink"],
+      "props": ["photo", "phone", "cat", "guitar"],
+      "filter": "default"
+    },
+    "rain_street": {
+      "keywords": ["雨", "伞", "街", "夜", "离开", "眼泪", "哭", "孤独", "rain", "street", "night", "tears", "alone", "goodbye"],
+      "palette": ["indigo", "blue", "gray", "red", "amber", "ink"],
+      "props": ["red_umbrella", "letter", "phone"],
+      "filter": "rain_night"
+    },
+    "seaside": {
+      "keywords": ["海", "海边", "烟火", "夏天", "风", "日落", "夕阳", "沙滩", "sea", "ocean", "summer", "fireworks", "sunset", "beach"],
+      "palette": ["sky", "sea", "cream", "coral", "amber", "indigo"],
+      "props": ["photo", "letter", "cat"],
+      "filter": "dawn"
+    },
+    "station": {
+      "keywords": ["车站", "列车", "火车", "远方", "出发", "回来", "等待", "行李", "station", "train", "departure", "arrival", "waiting", "away"],
+      "palette": ["cream", "sea", "wood", "coral", "gray", "ink"],
+      "props": ["ticket", "suitcase", "letter"],
+      "filter": "memory"
+    },
+    "stage": {
+      "keywords": ["唱", "歌", "舞台", "音乐", "掌声", "梦想", "星", "光", "song", "sing", "stage", "music", "dream", "star", "light"],
+      "palette": ["violet", "indigo", "pink", "amber", "cream", "ink"],
+      "props": ["guitar", "microphone", "player"],
+      "filter": "stage"
+    },
+    "highway": {
+      "keywords": ["公路", "车", "旅行", "沙漠", "城市", "路", "远方", "road", "highway", "drive", "travel", "city", "journey"],
+      "palette": ["coral", "amber", "sky", "violet", "cream", "ink"],
+      "props": ["suitcase", "photo", "bicycle"],
+      "filter": "dawn"
+    },
+    "ancient": {
+      "keywords": ["江湖", "剑", "月", "山", "酒", "宿命", "天涯", "故人", "sword", "moon", "mountain", "wine", "destiny"],
+      "palette": ["gray", "indigo", "red", "cream", "wood", "ink"],
+      "props": ["scroll", "letter", "guitar"],
+      "filter": "default"
+    },
+    "generic": {
+      "keywords": [],
+      "palette": ["cream", "mint", "sky", "coral", "wood", "ink"],
+      "props": ["photo", "letter", "cat"],
+      "filter": "default"
+    }
+  },
+  "prop_keywords": {
+    "red_umbrella": ["伞", "umbrella"],
+    "letter": ["信", "情书", "想念", "letter", "miss"],
+    "photo": ["照片", "相片", "回忆", "记得", "photo", "memory", "remember"],
+    "guitar": ["吉他", "歌", "唱", "guitar", "song", "sing"],
+    "cat": ["猫", "cat"],
+    "phone": ["电话", "短信", "消息", "phone", "message", "call"],
+    "ticket": ["车票", "票", "ticket"],
+    "suitcase": ["行李", "旅行", "suitcase", "luggage"],
+    "player": ["播放器", "唱片", "磁带", "record", "cassette", "player"],
+    "scroll": ["卷轴", "书信", "scroll"],
+    "bicycle": ["单车", "自行车", "bicycle", "bike"],
+    "microphone": ["麦克风", "舞台", "microphone", "stage"]
+  },
+  "qc": {
+    "max_sync_ms": 50,
+    "max_audio_offset_ms": 50,
+    "black_frame_mean_luma": 8.0,
+    "black_frame_max_ratio": 0.002,
+    "freeze_run_frames": 90,
+    "max_frame_difference": 235.0,
+    "contact_sheet_interval_seconds": 5
+  }
+}
