@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+import art
+
 __all__ = ["load_style", "plan_timeline", "render_video", "find_font"]
 
 _SCENE_NAMES = (
@@ -68,9 +70,9 @@ def find_font(style: dict | None = None) -> str:
     windows_root = Path(os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows")
     windows_fonts = windows_root / "Fonts"
     for name in (
+        "simhei.ttf",
         "msyh.ttc",
         "msyhbd.ttc",
-        "simhei.ttf",
         "NotoSansCJK-Regular.ttc",
         "NotoSansCJKsc-Regular.otf",
         "NotoSansSC-Regular.ttf",
@@ -267,14 +269,11 @@ def _select_props(text: str, scene: str, motif: str, style: dict) -> list[str]:
         if score:
             ranked.append((-score, index, name))
     ranked.sort()
-    scene_props = list(style.get("scenes", {}).get(scene, {}).get("props", []))
     result: list[str] = []
-    for name in [motif] + [item[2] for item in ranked] + scene_props:
-        if name and name not in result:
+    for _, _, name in ranked:
+        if name not in result:
             result.append(name)
-        if len(result) == 3:
-            break
-    return result
+    return result[:2]
 
 
 def _global_motif(lines: list[dict], style: dict) -> str:
@@ -292,6 +291,92 @@ def _global_motif(lines: list[dict], style: dict) -> str:
     return props[0] if props else "letter"
 
 
+_STORY_ARCS = {
+    "station": ("station", "station", "seaside", "station", "bedroom", "rain_street", "seaside", "station"),
+    "seaside": ("seaside", "seaside", "station", "seaside", "bedroom", "rain_street", "seaside", "seaside"),
+    "campus": ("campus", "campus", "campus", "campus", "bedroom", "rain_street", "campus", "campus"),
+    "bedroom": ("bedroom", "bedroom", "station", "seaside", "bedroom", "rain_street", "bedroom", "station"),
+    "rain_street": ("rain_street", "rain_street", "station", "bedroom", "rain_street", "seaside", "station", "rain_street"),
+    "stage": ("stage", "bedroom", "stage", "stage", "bedroom", "rain_street", "stage", "stage"),
+    "highway": ("highway", "highway", "station", "seaside", "highway", "rain_street", "highway", "station"),
+    "ancient": ("ancient", "ancient", "ancient", "ancient", "bedroom", "ancient", "ancient", "ancient"),
+    "generic": ("generic", "station", "seaside", "generic", "bedroom", "rain_street", "seaside", "station"),
+}
+
+_PHASE_SHOTS = {
+    "prologue": ("landscape",),
+    "encounter": ("wide", "medium", "object", "wide", "close", "medium"),
+    "development": ("wide", "medium", "close", "wide", "object", "medium"),
+    "separation": ("wide", "close", "medium", "object", "wide", "close"),
+    "memory": ("object", "close", "wide", "medium", "object", "close"),
+    "return": ("wide", "medium", "wide", "close", "medium", "wide"),
+    "epilogue": ("landscape",),
+}
+
+
+def _story_theme(lines: list[dict], style: dict) -> str:
+    if len(lines) <= 3:
+        for line in lines:
+            matched = _match_scene(line["text"], style)
+            if matched != "generic":
+                return matched
+    joined = "\n".join(line["text"] for line in lines)
+    if _keyword_score(joined, style.get("scenes", {}).get("seaside", {}).get("keywords", [])) and _keyword_score(
+        joined, ["离开", "回来", "等待", "未来", "车站", "列车", "远方", "你"]
+    ):
+        return "station"
+    ranked = []
+    for index, name in enumerate(_SCENE_NAMES):
+        if name == "generic":
+            continue
+        score = _keyword_score(joined, style.get("scenes", {}).get(name, {}).get("keywords", []))
+        ranked.append((score, -index, name))
+    best = max(ranked, default=(0, 0, "generic"))
+    return best[2] if best[0] > 0 else "generic"
+
+
+def _story_scene(theme: str, progress: float) -> str:
+    arc = _STORY_ARCS.get(theme, _STORY_ARCS["generic"])
+    chapter = min(len(arc) - 1, int(max(0.0, min(0.999999, progress)) * len(arc)))
+    return arc[chapter]
+
+
+def _story_phase(progress: float, opening: bool = False, closing: bool = False) -> str:
+    if opening:
+        return "prologue"
+    if closing:
+        return "epilogue"
+    if progress < 0.18:
+        return "encounter"
+    if progress < 0.42:
+        return "development"
+    if progress < 0.66:
+        return "separation"
+    if progress < 0.84:
+        return "memory"
+    return "return"
+
+
+def _shot_weather(theme: str, scene: str, phase: str, text: str, progress: float) -> str:
+    if _keyword_score(text, ["雪", "初雪", "snow"]):
+        return "snow"
+    if scene == "rain_street" or _keyword_score(text, ["雨", "下雨", "rain"]):
+        return "rain"
+    if _keyword_score(text, ["夜", "月亮", "星空", "失眠", "night", "moon"]):
+        return "night"
+    if theme == "station" and 0.72 <= progress < 0.82:
+        return "snow"
+    if phase == "separation" and scene in ("station", "rain_street"):
+        return "rain"
+    if scene == "seaside" or phase in ("memory", "return") or _keyword_score(
+        text, ["夕阳", "日落", "黄昏", "sunset"]
+    ):
+        return "sunset"
+    if scene == "bedroom" and phase not in ("return", "epilogue"):
+        return "night"
+    return "day"
+
+
 def _nearest_boundary_frame(target: float, fps: int, candidates: np.ndarray, window: float) -> tuple[int, bool]:
     plain = int(round(target * fps))
     if not len(candidates):
@@ -304,6 +389,64 @@ def _nearest_boundary_frame(target: float, fps: int, candidates: np.ndarray, win
     if abs(snapped / fps - target) > window + 1e-12:
         return plain, False
     return snapped, True
+
+
+def _camera_plan(shot_type: str, phase: str, index: int, style: dict) -> dict:
+    config = style.get("camera", {})
+    kind = str(config.get("default_by_shot", {}).get(shot_type, "static")) if config.get("enabled", True) else "static"
+    if phase == "memory" and shot_type in ("wide", "medium"):
+        kind = "pull_out"
+    elif phase == "separation" and shot_type == "close":
+        kind = "push_in"
+    elif shot_type == "wide" and index % 2:
+        kind = "pan_left"
+    return {
+        "kind": kind,
+        "max_crop_pixels": max(0, int(config.get("max_crop_pixels", 12))),
+        "pan_pixels": max(0, int(config.get("pan_pixels", 8))),
+        "hold_frames": max(1, int(config.get("motion_hold_frames", 2))),
+        "direction": -1 if kind == "pan_left" else 1,
+    }
+
+
+def _shot_effects(base: dict, progress: float) -> list[str]:
+    text = base["text"]
+    effects: list[str] = []
+    if base["story_phase"] in ("prologue", "epilogue"):
+        effects.append("title_card")
+    if base["story_phase"] == "memory":
+        effects.append("photo_frame" if base["shot_type"] in ("object", "close") else "film_frame")
+    if _keyword_score(text, ["梦", "想象", "如果", "幻想", "dream", "imagine"]):
+        effects.append("thought_bubble")
+    if _keyword_score(text, ["烟花", "烟火", "firework"]):
+        effects.append("fireworks")
+    if base["action"] in ("embrace", "heart_glass") or _keyword_score(text, ["爱", "心动", "喜欢", "love", "heart"]):
+        effects.append("pixel_hearts")
+    if base["scene"] == "stage" and progress >= 0.4:
+        effects.append("stage_lights")
+    return list(dict.fromkeys(effects))[:3]
+
+
+def _shot_sfx(base: dict) -> list[str]:
+    mapping = {
+        "walking": "footsteps",
+        "cycling": "bicycle_bell",
+        "reading": "paper",
+        "photographing": "camera_shutter",
+        "playing": "room_tone",
+        "train": "train",
+        "heart_glass": "paper",
+    }
+    cues = [mapping[base["action"]]] if base["action"] in mapping else []
+    if base["weather"] == "rain":
+        cues.append("rain")
+    elif base["weather"] == "snow":
+        cues.append("wind")
+    if base["scene"] == "seaside":
+        cues.append("waves")
+    if "fireworks" in base.get("effects", []):
+        cues.append("fireworks")
+    return list(dict.fromkeys(cues))
 
 
 def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
@@ -383,29 +526,121 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
     if len(bases) > frame_count:
         raise ValueError("歌词句数超过可用视频帧数，无法在不合并短句的情况下连续排布")
 
-    for base in bases:
+    theme = _story_theme(lines, style)
+    joined_lyrics = "\n".join(line["text"] for line in lines)
+    pair_story = bool(_keyword_score(joined_lyrics, ["你", "你们", "我们", "同桌", "故人", "friend", "together", "you", "us"]))
+    phase_counts: dict[str, int] = {}
+    for base_index, base in enumerate(bases):
+        progress = base_index / max(1, len(bases) - 1)
+        opening = bool(base["opening"])
+        closing = bool(base["closing"])
+        base["scene"] = theme if opening or closing else _story_scene(theme, progress)
+        base["story_phase"] = _story_phase(progress, opening, closing)
+        base["chapter"] = min(8, int(progress * 8) + 1)
+        phase_pattern = _PHASE_SHOTS[base["story_phase"]]
+        pattern_index = phase_counts.get(base["story_phase"], 0)
+        phase_counts[base["story_phase"]] = pattern_index + 1
+        base["shot_type"] = phase_pattern[pattern_index % len(phase_pattern)]
+        if _keyword_score(base["text"], ["相拥", "拥抱", "抱紧", "靠近"]):
+            base["shot_type"] = "medium"
+        elif _keyword_score(base["text"], ["画心", "一颗心", "表白", "雾气", "玻璃"]):
+            base["shot_type"] = "object"
+        elif _keyword_score(base["text"], ["单车", "自行车", "骑行", "阅读", "看书", "课本", "拍照", "相机", "快门", "bicycle", "reading", "photograph", "camera"]):
+            base["shot_type"] = "medium"
+        base["weather"] = _shot_weather(theme, base["scene"], base["story_phase"], base["text"], progress)
+        if closing:
+            base["weather"] = bases[0]["weather"]
+        base["compare_weather"] = None
+        if theme == "station" and (opening or closing):
+            base["weather"] = "day" if opening else bases[0]["weather"]
+            base["compare_weather"] = "rain" if opening else "snow"
+        elif (
+            pair_story
+            and base["scene"] == "station"
+            and base["story_phase"] == "return"
+            and base["shot_type"] in ("wide", "medium")
+        ):
+            base["weather"] = "day"
+            base["compare_weather"] = "snow"
         scene_config = style.get("scenes", {}).get(base["scene"], {})
         base["palette"] = list(scene_config.get("palette", style.get("scenes", {}).get("generic", {}).get("palette", [])))
         base["props"] = _select_props(base["text"], base["scene"], motif, style)
         base["filter"] = scene_config.get("filter", "default")
+        if base["compare_weather"]:
+            base["filter"] = "default"
+        elif base["scene"] == "station" and base["weather"] in ("rain", "night"):
+            base["filter"] = "station_rain"
+        elif base["weather"] in ("rain", "night"):
+            base["filter"] = "rain_night"
+        elif base["weather"] in ("sunset", "snow"):
+            base["filter"] = "dawn"
         base["energy"] = _energy_at(curve, (base["target_start"] + base["target_end"]) / 2)
-        characters = [] if base["opening"] or base["closing"] else ["protagonist"]
-        if not base["opening"] and not base["closing"]:
-            if _keyword_score(base["text"], ["你", "你们", "我们", "同桌", "故人", "friend", "together", "you", "us"]):
-                characters.append("companion")
-            if "cat" in base["props"] and "cat" not in characters:
-                characters.append("cat")
+        embrace = pair_story and bool(_keyword_score(base["text"], ["相拥", "拥抱", "抱紧", "靠近"]))
+        heart_glass = base["shot_type"] == "object" and bool(
+            _keyword_score(base["text"], ["画心", "一颗心", "表白", "雾气", "玻璃"])
+        )
+        characters: list[str] = []
+        if base["shot_type"] not in ("landscape", "object"):
+            if embrace:
+                characters = ["protagonist", "companion"]
+            elif base["shot_type"] == "close":
+                characters = ["companion" if pair_story and base_index % 2 else "protagonist"]
+            else:
+                characters = ["protagonist"]
+                if pair_story and base_index % 3 != 1:
+                    characters.append("companion")
         base["characters"] = characters
-    if bases[-1]["closing"]:
-        for key in ("scene", "palette", "props", "filter"):
-            bases[-1][key] = list(bases[0][key]) if isinstance(bases[0][key], list) else bases[0][key]
+        if base["shot_type"] == "landscape":
+            base["props"] = ["cat"] if closing else []
+        elif base["shot_type"] == "object":
+            object_props = [name for name in base["props"] if name != "cat"][:2]
+            base["props"] = [] if heart_glass else (object_props or [motif])
+        base["action"] = "waiting"
+        if heart_glass:
+            base["action"] = "heart_glass"
+        elif embrace:
+            base["action"] = "embrace"
+        elif base["scene"] == "station" and (opening or base_index % 6 == 2 or _keyword_score(base["text"], ["列车", "火车", "train"])):
+            base["action"] = "train"
+        elif characters and _keyword_score(base["text"], ["单车", "自行车", "骑行", "bicycle", "bike", "cycling"]):
+            base["action"] = "cycling"
+        elif characters and _keyword_score(base["text"], ["阅读", "看书", "课本", "reading", "book"]):
+            base["action"] = "reading"
+        elif characters and _keyword_score(base["text"], ["拍照", "相机", "快门", "photograph", "camera"]):
+            base["action"] = "photographing"
+        elif "guitar" in base["props"] and base["scene"] in ("stage", "bedroom"):
+            base["action"] = "playing"
+        elif len(characters) > 1:
+            base["action"] = "talking"
+        elif base["story_phase"] == "return":
+            base["action"] = "walking"
+        base["camera"] = _camera_plan(base["shot_type"], base["story_phase"], base_index, style)
+        if base["compare_weather"]:
+            base["camera"]["kind"] = "static"
+        base["blocking"] = {
+            "layout": "object_table" if base["shot_type"] == "object" else ("environment_only" if not characters else ("close_pair" if embrace else ("two_shot" if len(characters) > 1 else "center_single"))),
+            "primary_action": base["action"],
+            "screen_direction": "left_to_right" if base_index % 2 == 0 else "right_to_left",
+        }
+        base["effects"] = _shot_effects(base, progress)
+        base["sfx"] = _shot_sfx(base)
+        base["title"] = {"station": "车站 · 远方", "seaside": "海边 · 夏天", "campus": "校园 · 纪念", "bedroom": "房间 · 来信", "rain_street": "雨街 · 等待", "stage": "舞台 · 星光", "highway": "公路 · 旅行", "ancient": "江湖 · 故人", "generic": "像素 · 纪行"}[theme]
+        base["density"] = {
+            "background_layers": int(style.get("density", {}).get("background_layers", 5)),
+            "primary_actions": 1,
+            "object_props": len(base["props"]) if base["shot_type"] == "object" else 0,
+            "emotional_overlays": min(2, len(base["effects"])),
+        }
     eligible_energy = [base["energy"] for base in bases if not base["opening"] and not base["closing"]]
     if eligible_energy and max(eligible_energy) >= 0.75 and max(eligible_energy) > min(eligible_energy):
         climax = max(
             (base for base in bases if not base["opening"] and not base["closing"]),
             key=lambda base: base["energy"],
         )
-        climax["filter"] = "stage"
+        climax["energy_peak"] = True
+        if climax["scene"] in ("seaside", "stage", "station") and "fireworks" not in climax["effects"]:
+            climax["effects"].append("fireworks")
+            climax["sfx"].append("fireworks")
 
     beats = _feature_times(features, ("beats", "beat_times", "beat_seconds"))
     onsets = _feature_times(features, ("onsets", "onset_times", "onset_seconds"))
@@ -455,6 +690,23 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
                     "props": list(base["props"]),
                     "characters": list(base["characters"]),
                     "filter": base["filter"],
+                    "art_version": 2,
+                    "shot_type": base["shot_type"] if chunk_start == first_frame else ("medium" if base["shot_type"] == "wide" else base["shot_type"]),
+                    "weather": base["weather"],
+                    "compare_weather": base["compare_weather"],
+                    "story_phase": base["story_phase"],
+                    "chapter": base["chapter"],
+                    "narrative_beat": base["story_phase"],
+                    "action": base["action"],
+                    "camera": dict(base["camera"]),
+                    "blocking": dict(base["blocking"]),
+                    "effects": list(base["effects"]),
+                    "sfx": list(dict.fromkeys(base["sfx"])),
+                    "density": dict(base["density"]),
+                    "title": base["title"],
+                    "energy": float(base["energy"]),
+                    "energy_peak": bool(base.get("energy_peak", False)),
+                    "pose_hold_frames": int(style.get("dynamics", {}).get("pose_hold_frames", 6)),
                     "transition_in": "hard_cut",
                     "transition_frames": 0,
                     "seed": top_seed + shot_index * 7919,
@@ -508,6 +760,44 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
             index = min(scroll_candidates, key=lambda item: (abs(shots[item]["start"] / duration - 0.62), item))
             set_transition(index, "scroll_wipe")
 
+    def place_reference_transition(name: str, candidates: list[int]) -> None:
+        limit = max(0, int(transition_style.get(name, {}).get("max_per_video", 0)))
+        placed = 0
+        for index in candidates:
+            if placed >= limit:
+                break
+            current = shots[index]["transition_in"]
+            if current == "hard_cut" or (name in ("photo_reveal", "memory_dissolve") and current in ("white_flash", "scroll_wipe")):
+                set_transition(index, name)
+                placed += 1
+
+    memory_candidates = [
+        index for index in range(1, len(shots))
+        if shots[index]["story_phase"] == "memory" and base_indices[index] != base_indices[index - 1]
+    ]
+    place_reference_transition(
+        "photo_reveal",
+        [index for index in memory_candidates if shots[index]["shot_type"] == "object"],
+    )
+    place_reference_transition("memory_dissolve", memory_candidates)
+    place_reference_transition(
+        "match_cut",
+        [
+            index for index in range(1, len(shots))
+            if shots[index]["scene"] == shots[index - 1]["scene"]
+            and shots[index]["shot_type"] != shots[index - 1]["shot_type"]
+            and base_indices[index] != base_indices[index - 1]
+        ],
+    )
+    place_reference_transition(
+        "film_wipe",
+        [
+            index for index in range(1, len(shots))
+            if shots[index]["chapter"] != shots[index - 1]["chapter"]
+            and base_indices[index] != base_indices[index - 1]
+        ],
+    )
+
     subtitles: list[dict] = []
     for index, line in enumerate(lines):
         target_start = float(line["start"])
@@ -545,7 +835,8 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         alignment_status = str(alignment.get("alignment_status", alignment.get("status", "aligned")))
 
     timeline = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "style_profile": style.get("reference_profile", {}).get("id", "pixel-narrative-mv"),
         "fps": fps,
         "duration": duration,
         "frame_count": frame_count,
@@ -555,6 +846,8 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         "low_height": int(render["low_height"]),
         "scale": int(render["scale"]),
         "seed": top_seed,
+        "art_version": 2,
+        "story_theme": theme,
         "subtitle_band_height": int(style.get("subtitle", {}).get("band_height", 160)),
         "alignment_status": alignment_status,
         "shots": shots,
@@ -1067,7 +1360,42 @@ def _shot_context(shot: dict, style: dict) -> dict:
     }
 
 
+def _apply_camera(image: Image.Image, shot: dict, local_frame: int) -> Image.Image:
+    camera = shot.get("camera", {})
+    kind = str(camera.get("kind", "static"))
+    if kind == "static" or image.size != (480, 270):
+        return image
+    total = max(1, int(shot.get("end_frame", 1)) - int(shot.get("start_frame", 0)) - 1)
+    hold = max(1, int(camera.get("hold_frames", 2)))
+    progress = min(1.0, (local_frame // hold) / max(1, total // hold))
+    maximum = max(0, int(camera.get("max_crop_pixels", 12)))
+    if kind == "push_in":
+        margin = int(maximum * progress)
+    elif kind == "pull_out":
+        margin = int(maximum * (1.0 - progress))
+    else:
+        margin = maximum
+    if margin <= 0:
+        return image
+    vertical = int(round(margin * 9 / 16))
+    crop_width = 480 - margin * 2
+    crop_height = 270 - vertical * 2
+    x0 = margin
+    if kind in ("pan_left", "pan_right"):
+        pan = min(margin, max(0, int(camera.get("pan_pixels", 8))))
+        direction = -1 if kind == "pan_left" else 1
+        x0 = margin + int(round((progress * 2 - 1) * pan * direction))
+    x0 = max(0, min(480 - crop_width, x0))
+    return image.crop((x0, vertical, x0 + crop_width, vertical + crop_height)).resize(
+        (480, 270), Image.Resampling.NEAREST
+    )
+
+
 def _render_low_frame(shot: dict, local_frame: int, style: dict, context: dict) -> Image.Image:
+    if int(shot.get("art_version", 1)) >= 2:
+        image = art.render_art_frame(shot, local_frame, style, context)
+        image = _apply_camera(image, shot, local_frame)
+        return _apply_filter(image, str(shot.get("filter", "default")), style)
     image = Image.new("RGB", (480, 270), _rgb("cream", style.get("palette", {})))
     _draw_scene_background(image, shot, local_frame, style, context)
     draw = ImageDraw.Draw(image)
@@ -1128,6 +1456,44 @@ def _transition(
         if cut:
             output[:, current.width - cut :] = new[:, :cut]
         return Image.fromarray(output)
+    if name == "memory_dissolve":
+        bayer = np.array(((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5)), dtype=np.float32)
+        threshold = np.tile(bayer, (math.ceil(current.height / 4), math.ceil(current.width / 4)))[: current.height, : current.width]
+        mask = Image.fromarray(np.where(threshold < progress * 16.0, 255, 0).astype(np.uint8), mode="L")
+        return Image.composite(current, previous, mask)
+    if name == "film_wipe":
+        cut = int(current.width * progress)
+        output = previous.copy()
+        if cut:
+            output.paste(current.crop((0, 0, cut, current.height)), (0, 0))
+        draw = ImageDraw.Draw(output)
+        edge = max(0, min(current.width - 1, cut))
+        draw.rectangle((max(0, edge - 5), 0, min(current.width - 1, edge + 5), current.height), fill=(23, 21, 28))
+        for y in range(5, current.height, 18):
+            draw.rectangle((max(0, edge - 3), y, min(current.width - 1, edge + 3), y + 7), fill=(244, 235, 221))
+        return output
+    if name == "photo_reveal":
+        if progress >= 1.0:
+            return current
+        output = previous.copy()
+        width = max(12, int(current.width * progress))
+        height = max(7, int(current.height * progress))
+        reveal = current.resize((width, height), Image.Resampling.NEAREST)
+        x = (current.width - width) // 2
+        y = (current.height - height) // 2
+        draw = ImageDraw.Draw(output)
+        border = max(2, int(8 * progress))
+        draw.rectangle((x - border, y - border, x + width + border, y + height + border), fill=(244, 235, 221))
+        output.paste(reveal, (x, y))
+        return output
+    if name == "match_cut":
+        if progress > 0.5:
+            return current
+        margin = int(10 * progress * 2)
+        if margin <= 0:
+            return previous
+        crop = previous.crop((margin, int(margin * 9 / 16), previous.width - margin, previous.height - int(margin * 9 / 16)))
+        return crop.resize(current.size, Image.Resampling.NEAREST)
     return current
 
 
@@ -1202,20 +1568,17 @@ def _prepare_subtitle(
     background = _rgb(config.get("background", "cream"), palette)
     text_color = _rgb(config.get("text_color", "ink"), palette)
     accent = _rgb(config.get("accent_color", "red"), palette)
+    border = _rgb(config.get("border_color", "coral"), palette)
     contrast = _contrast(background, text_color)
     if contrast < float(config.get("min_contrast", 4.5)):
         raise ValueError(f"字幕对比度 {contrast:.2f} 低于 min_contrast")
-    band_height = int(config.get("band_height", 160))
-    band_top = height - band_height
     safe = max(0, int(config.get("safe_margin", 48)))
-    margin_x = max(0, int(config.get("margin_x", 120)))
-    left = max(safe, margin_x)
-    right = width - max(safe, margin_x)
-    top = band_top + max(0, int(config.get("margin_y", 28)))
-    bottom = height - safe
-    max_width = right - left
-    max_height = bottom - top
-    if max_width <= 0 or max_height <= 0:
+    padding_x = max(8, int(config.get("box_padding_x", 24)))
+    padding_y = max(6, int(config.get("box_padding_y", 14)))
+    note_gap = max(4, int(config.get("note_gap", 18)))
+    max_box_width = min(int(config.get("max_box_width", 1240)), width - 2 * safe)
+    min_box_width = min(max_box_width, max(0, int(config.get("min_box_width", 280))))
+    if max_box_width <= 2 * padding_x + 80:
         raise ValueError("字幕安全区尺寸无效")
     max_lines = max(1, int(config.get("max_lines", 2)))
     configured_chars = max(1, int(config.get("max_chars_per_line", 24)))
@@ -1229,46 +1592,59 @@ def _prepare_subtitle(
         char_limit = configured_chars if not relaxed else max(configured_chars, int(math.ceil(len(text) / max_lines)))
         for size in range(initial_size, minimum_size - 1, -2):
             font = ImageFont.truetype(font_path, size)
-            lines = _wrap_text(probe, text, font, max_width, char_limit)
+            note_height = max(24, size)
+            note_width = max(18, int(note_height * 0.72))
+            max_text_width = max_box_width - 2 * padding_x - note_width - note_gap
+            lines = _wrap_text(probe, text, font, max_text_width, char_limit)
             if len(lines) > max_lines:
                 continue
             boxes = [probe.textbbox((0, 0), line, font=font) for line in lines]
             heights = [box[3] - box[1] for box in boxes]
             widths = [box[2] - box[0] for box in boxes]
             block_height = sum(heights) + spacing * (len(lines) - 1)
-            if max(widths, default=0) <= max_width and block_height <= max_height:
-                selected = (font, lines, boxes, heights, widths, block_height)
-                break
+            selected = (font, lines, boxes, heights, widths, block_height, note_width, note_height)
+            break
         if selected:
             break
     if selected is None:
         raise ValueError(f"字幕“{text[:24]}”过长，无法在 max_lines 和安全区内完整显示")
-    font, lines, boxes, heights, widths, block_height = selected
-    y = band_top + max(int(config.get("margin_y", 28)), (band_height - block_height) // 2)
-    y = max(top, min(y, bottom - block_height))
+    font, lines, boxes, heights, widths, block_height, note_width, note_height = selected
+    box_width = min(
+        max_box_width,
+        max(min_box_width, max(widths, default=0) + note_width + note_gap + 2 * padding_x),
+    )
+    box_height = block_height + 2 * padding_y
+    bottom_margin = max(safe, int(config.get("bottom_margin", 36)))
+    x0 = (width - box_width) // 2
+    y0 = height - bottom_margin - box_height
+    x1, y1 = x0 + box_width, y0 + box_height
+    if x0 < safe or x1 > width - safe or y0 < safe or y1 > height - safe:
+        raise ValueError(f"字幕“{text[:24]}”超出安全区")
+    note_x = x0 + padding_x
+    note_y = y0 + (box_height - note_height) // 2
+    note_bounds = (note_x, note_y, note_x + note_width, note_y + note_height)
+    text_left = note_x + note_width + note_gap
+    text_right = x1 - padding_x
+    y = y0 + padding_y
     line_items = []
     for line, box, line_height, line_width in zip(lines, boxes, heights, widths):
-        x = left + (max_width - line_width) // 2
+        x = text_left + (text_right - text_left - line_width) // 2
         origin = (int(x - box[0]), int(y - box[1]))
         bounds = (int(x), int(y), int(x + line_width), int(y + line_height))
-        if bounds[0] < left or bounds[2] > right or bounds[1] < top or bounds[3] > bottom:
-            raise ValueError(f"字幕“{text[:24]}”超出安全区")
+        if bounds[0] < text_left or bounds[2] > text_right or bounds[1] < y0 or bounds[3] > y1:
+            raise ValueError(f"字幕“{text[:24]}”超出字幕框")
         line_items.append((line, origin, bounds))
         y += line_height + spacing
-
-    note_height = max(24, int(getattr(font, "size", initial_size)))
-    note_width = max(18, int(note_height * 0.72))
-    note_x = max(safe, left - max(56, note_width + 20))
-    note_y = band_top + (band_height - note_height) // 2
-    note_bounds = (note_x, note_y, note_x + note_width, note_y + note_height)
-    if note_bounds[0] < safe or note_bounds[2] > width - safe or note_bounds[3] > height - safe:
-        raise ValueError("字幕红色音符超出安全区")
     return {
         "background": background,
         "text_color": text_color,
         "accent": accent,
+        "border": border,
+        "border_width": max(1, int(config.get("border_width", 4))),
+        "corner_radius": max(0, int(config.get("corner_radius", 8))),
         "contrast": contrast,
-        "band_top": band_top,
+        "band_top": height - int(config.get("band_height", 160)),
+        "box_bounds": (x0, y0, x1, y1),
         "font": font,
         "lines": line_items,
         "note_bounds": note_bounds,
@@ -1278,7 +1654,12 @@ def _prepare_subtitle(
 
 def _draw_subtitle(image: Image.Image, prepared: dict) -> None:
     draw = ImageDraw.Draw(image)
-    draw.rectangle((0, prepared["band_top"], image.width, image.height), fill=prepared["background"])
+    draw.rectangle(
+        prepared["box_bounds"],
+        fill=prepared["background"],
+        outline=prepared["border"],
+        width=prepared["border_width"],
+    )
     for text, origin, _ in prepared["lines"]:
         draw.text(origin, text, font=prepared["font"], fill=prepared["text_color"])
     x0, y0, x1, y1 = prepared["note_bounds"]
@@ -1352,6 +1733,9 @@ def render_video(
         subtitle_for_frame[int(subtitle["start_frame"]) : int(subtitle["end_frame"])] = index
 
     font_path = find_font(style) if subtitles else None
+    if font_path is not None:
+        for context in contexts:
+            context["font_path"] = str(font_path)
     prepared_subtitles = [
         _prepare_subtitle(subtitle, style, str(font_path), width, height) for subtitle in subtitles
     ]

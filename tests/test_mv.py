@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
@@ -20,6 +20,7 @@ if str(SCRIPTS) not in sys.path:
 
 import media
 import mv
+import preview
 import qc
 import render
 
@@ -168,8 +169,11 @@ class MediaAndTimelineTests(unittest.TestCase):
         aligned["lines"][1].update(text="雨夜红伞", start=1.8, end=3.8)
         features = {"beats": [1.82], "onsets": [], "rms_times": [0, 2, 4], "rms": [0.2, 0.8, 0.3]}
         timeline = render.plan_timeline(aligned, features, self.style)
+        self.assertEqual(timeline["art_version"], 2)
+        self.assertEqual(timeline["story_theme"], "campus")
         self.assertEqual(timeline["shots"][0]["scene"], "campus")
-        self.assertEqual(timeline["shots"][1]["scene"], "rain_street")
+        self.assertEqual(timeline["shots"][1]["scene"], "campus")
+        self.assertEqual(timeline["shots"][1]["weather"], "rain")
         self.assertLessEqual(abs(timeline["shots"][1]["beat_snap_ms"]), 50.0)
         last = timeline["shots"][-1]
         self.assertEqual(last["transition_out"], "iris_out")
@@ -182,6 +186,95 @@ class MediaAndTimelineTests(unittest.TestCase):
             self.assertLessEqual(abs(subtitle["error_start_ms"]), 50.0)
             self.assertEqual(subtitle["start_frame"], int(np.ceil(subtitle["target_start"] * 30)))
 
+    def test_art_v2_story_arc_shot_types_and_loop(self) -> None:
+        timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
+        shots = timeline["shots"]
+        first, last = shots[0], shots[-1]
+        self.assertEqual(timeline["story_theme"], "station")
+        self.assertEqual(first["scene"], last["scene"])
+        self.assertEqual(first["weather"], last["weather"])
+        self.assertEqual(first["story_phase"], "prologue")
+        self.assertEqual(last["story_phase"], "epilogue")
+        self.assertEqual(first["shot_type"], "landscape")
+        self.assertEqual(last["shot_type"], "landscape")
+        self.assertEqual(first["action"], "train")
+        self.assertEqual(first["compare_weather"], "rain")
+        self.assertEqual(last["compare_weather"], "snow")
+        self.assertEqual(last["props"], ["cat"])
+        self.assertFalse(first["characters"])
+        embrace = next(shot for shot in shots if shot["action"] == "embrace")
+        self.assertEqual(embrace["characters"], ["protagonist", "companion"])
+        heart = next(shot for shot in shots if shot["action"] == "heart_glass")
+        self.assertEqual(heart["shot_type"], "object")
+        self.assertEqual(heart["props"], [])
+        self.assertTrue({shot["art_version"] for shot in shots} == {2})
+        self.assertGreaterEqual(
+            {shot["shot_type"] for shot in shots},
+            {"landscape", "wide", "medium", "close", "object"},
+        )
+        self.assertGreaterEqual(
+            {shot["scene"] for shot in shots},
+            {"station", "seaside", "bedroom", "rain_street"},
+        )
+        object_shot = next(shot for shot in shots if shot["shot_type"] == "object")
+        self.assertLessEqual(len(object_shot["props"]), 2)
+        self.assertNotIn("cat", object_shot["props"])
+
+    def test_art_v2_frames_have_motion_and_compact_subtitles(self) -> None:
+        timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
+        font = render.find_font(self.style)
+        for shot in timeline["shots"]:
+            with self.subTest(shot=shot["id"]):
+                context = render._shot_context(shot, self.style)
+                context["font_path"] = font
+                first = render._render_low_frame(shot, 0, self.style, context)
+                later = render._render_low_frame(shot, 8, self.style, context)
+                self.assertEqual(first.size, (480, 270))
+                self.assertNotEqual(first.tobytes(), later.tobytes())
+        closing = timeline["shots"][-1]
+        context = render._shot_context(closing, self.style)
+        context["font_path"] = font
+        previous = None
+        freeze_run = 0
+        max_freeze_run = 0
+        for local_frame in range(100):
+            current = render._render_low_frame(closing, local_frame, self.style, context).tobytes()
+            freeze_run = freeze_run + 1 if current == previous else 0
+            max_freeze_run = max(max_freeze_run, freeze_run)
+            previous = current
+        self.assertLess(max_freeze_run, 90)
+        subtitle = timeline["subtitles"][0]
+        prepared = render._prepare_subtitle(subtitle, self.style, font, 1920, 1080)
+        x0, y0, x1, y1 = prepared["box_bounds"]
+        self.assertGreater(x0, 32)
+        self.assertLess(x1, 1888)
+        self.assertGreaterEqual(y0, 32)
+        self.assertLessEqual(y1, 1048)
+        self.assertLess(x1 - x0, 1920)
+        self.assertEqual(prepared["font"].size, 60)
+        self.assertEqual(prepared["corner_radius"], 0)
+        self.assertEqual(prepared["border_width"], 6)
+        self.assertEqual(prepared["band_top"], 860)
+
+    def test_reference_split_and_closeup_pixels(self) -> None:
+        timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
+        font = render.find_font(self.style)
+        opening = timeline["shots"][0]
+        context = render._shot_context(opening, self.style)
+        context["font_path"] = font
+        split = render._render_low_frame(opening, 20, self.style, context)
+        self.assertNotEqual(split.crop((0, 0, 239, 270)).tobytes(), split.crop((241, 0, 480, 270)).tobytes())
+        ink = render._rgb("ink", self.style["palette"])
+        self.assertEqual(split.getpixel((239, 135)), ink)
+        self.assertEqual(split.getpixel((240, 135)), ink)
+        for action in ("embrace", "heart_glass"):
+            shot = next(item for item in timeline["shots"] if item["action"] == action)
+            context = render._shot_context(shot, self.style)
+            context["font_path"] = font
+            frame = render._render_low_frame(shot, 30, self.style, context)
+            self.assertEqual(frame.size, (480, 270))
+            self.assertGreater(len(frame.getcolors(maxcolors=480 * 270) or []), 12)
+
     def test_iris_transition_reaches_black(self) -> None:
         current = Image.new("RGB", (480, 270), (255, 255, 255))
         black = Image.new("RGB", current.size, (0, 0, 0))
@@ -190,6 +283,56 @@ class MediaAndTimelineTests(unittest.TestCase):
         end = render._transition(current, black, "iris_out", 1.0, palette)
         self.assertEqual(start.getextrema(), ((255, 255), (255, 255), (255, 255)))
         self.assertEqual(end.getextrema(), ((0, 0), (0, 0), (0, 0)))
+
+    def test_full_reference_direction_actions_and_style_qc(self) -> None:
+        timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
+        actions = {shot["action"] for shot in timeline["shots"]}
+        effects = {effect for shot in timeline["shots"] for effect in shot["effects"]}
+        self.assertGreaterEqual(actions, {"reading", "cycling", "embrace", "heart_glass"})
+        self.assertGreaterEqual(effects, {"title_card", "thought_bubble", "fireworks", "photo_frame"})
+        self.assertTrue(all(shot["camera"]["kind"] for shot in timeline["shots"]))
+        report = qc.validate_style_profile(timeline, self.style)
+        self.assertTrue(report["passed"], report["checks"])
+        self.assertTrue(report["art_review_required"])
+        font = render.find_font(self.style)
+        for action in ("reading", "cycling"):
+            shot = next(item for item in timeline["shots"] if item["action"] == action)
+            context = render._shot_context(shot, self.style)
+            context["font_path"] = font
+            first = render._render_low_frame(shot, 0, self.style, context)
+            later = render._render_low_frame(shot, 12, self.style, context)
+            self.assertEqual(first.size, (480, 270))
+            self.assertNotEqual(first.tobytes(), later.tobytes())
+
+    def test_reference_transition_renderers(self) -> None:
+        previous = Image.new("RGB", (480, 270), (32, 64, 96))
+        ImageDraw.Draw(previous).rectangle((190, 80, 290, 190), fill=(200, 80, 70))
+        current = Image.new("RGB", (480, 270), (240, 220, 190))
+        palette = render._palette_image(self.style)
+        for name in ("memory_dissolve", "film_wipe", "photo_reveal", "match_cut"):
+            with self.subTest(name=name):
+                middle = render._transition(current, previous, name, 0.5, palette)
+                self.assertEqual(middle.size, current.size)
+                self.assertNotEqual(middle.tobytes(), current.tobytes())
+                self.assertNotEqual(middle.tobytes(), previous.tobytes())
+                if name != "film_wipe":
+                    end = render._transition(current, previous, name, 1.0, palette)
+                    self.assertEqual(end.tobytes(), current.tobytes())
+
+    def test_preview_includes_motion_transitions_and_style_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = preview.generate_preview(list(preview._SAMPLE_LYRICS), self.style, temporary)
+            root = Path(temporary)
+            self.assertTrue((root / "motion-contact-sheet.jpg").is_file())
+            self.assertTrue((root / "transition-contact-sheet.jpg").is_file())
+            self.assertTrue((root / "style-qc.json").is_file())
+            self.assertTrue(result["manifest"]["motion_sequences"])
+            self.assertTrue(result["manifest"]["transition_sequences"])
+            motion_actions = {record["action"] for record in result["manifest"]["motion_sequences"]}
+            transition_types = {record["type"] for record in result["manifest"]["transition_sequences"]}
+            self.assertGreaterEqual(motion_actions, {"cycling", "heart_glass"})
+            self.assertIn("iris_out", transition_types)
+            self.assertTrue(result["manifest"]["style_qc"]["passed"])
 
     def test_sync_boundary_and_invalid_alignment(self) -> None:
         self.assertFalse(qc._exceeds(50.0, 50.0))

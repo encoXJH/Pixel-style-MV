@@ -80,6 +80,86 @@ def _exceeds(value: float, limit: float) -> bool:
     return value > limit + 1e-7
 
 
+def validate_style_profile(timeline: dict[str, Any], style: dict[str, Any]) -> dict[str, Any]:
+    """检查风格配置是否真正进入时间轴；不替代逐帧人工艺术评审。"""
+    shots = _shots(timeline)
+    profile = style.get("reference_profile", {})
+    allowed_actions = set(profile.get("performance", {}).get("actions", []))
+    allowed_effects = {"title_card", "photo_frame", "film_frame", "thought_bubble", "pixel_hearts", "fireworks", "stage_lights"}
+    allowed_cameras = {"static", "push_in", "pull_out", "pan_left", "pan_right"}
+    transitions = style.get("transitions", {})
+    density = style.get("density", {})
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, passed: bool, detail: str) -> None:
+        checks.append({"id": name, "passed": bool(passed), "detail": detail})
+
+    check("reference_profile", bool(profile.get("id")), str(profile.get("id", "missing")))
+    check(
+        "shot_direction_fields",
+        all(all(key in shot for key in ("story_phase", "chapter", "camera", "blocking", "effects", "sfx", "density")) for shot in shots),
+        "每个镜头必须包含叙事阶段、章节、运镜、调度、特效、声音 cue 与密度字段",
+    )
+    check(
+        "action_vocabulary",
+        all(shot.get("action") in allowed_actions for shot in shots),
+        "动作必须来自参考证据支持的动作表",
+    )
+    check(
+        "integer_camera",
+        all(
+            shot.get("camera", {}).get("kind") in allowed_cameras
+            and all(isinstance(shot.get("camera", {}).get(key), int) and shot.get("camera", {}).get(key) >= 0 for key in ("max_crop_pixels", "pan_pixels", "hold_frames"))
+            for shot in shots
+        ),
+        "运镜只允许静态、整数像素推拉和横移",
+    )
+    check(
+        "effects_vocabulary",
+        all(set(shot.get("effects", [])).issubset(allowed_effects) for shot in shots),
+        "画面特效必须来自已实现的框中框、想象泡、爱心、烟花、标题与舞台灯光",
+    )
+    check(
+        "information_density",
+        all(
+            len(shot.get("props", [])) <= int(density.get("max_object_props", 2)) if shot.get("shot_type") == "object" else True
+            for shot in shots
+        ) and all(int(shot.get("density", {}).get("emotional_overlays", 0)) <= int(density.get("max_emotional_overlays", 2)) for shot in shots),
+        "物件镜头最多两件道具，情绪叠加层不超过配置上限",
+    )
+    check(
+        "transition_definitions",
+        all(shot.get("transition_in", "hard_cut") in transitions and shot.get("transition_out", "hard_cut") in transitions for shot in shots),
+        "所有转场必须存在帧数与使用上限配置",
+    )
+    opening = next((shot for shot in shots if shot.get("story_phase") == "prologue"), None)
+    ending = next((shot for shot in reversed(shots) if shot.get("story_phase") == "epilogue"), None)
+    check(
+        "motif_loop",
+        opening is None or ending is None or (opening.get("scene"), opening.get("weather")) == (ending.get("scene"), ending.get("weather")),
+        "片头片尾须回到同场景与主天气",
+    )
+    coverage = {
+        "shot_types": sorted({str(shot.get("shot_type")) for shot in shots}),
+        "actions": sorted({str(shot.get("action")) for shot in shots}),
+        "effects": sorted({str(effect) for shot in shots for effect in shot.get("effects", [])}),
+        "cameras": sorted({str(shot.get("camera", {}).get("kind")) for shot in shots}),
+        "transitions": sorted({str(shot.get("transition_in", "hard_cut")) for shot in shots} | {str(shot.get("transition_out", "hard_cut")) for shot in shots}),
+        "sound_cues": sorted({str(cue) for shot in shots for cue in shot.get("sfx", [])}),
+    }
+    return {
+        "schema_version": 1,
+        "profile": profile.get("id"),
+        "passed": all(item["passed"] for item in checks),
+        "scope": "structural_style_implementation_only",
+        "art_review_required": True,
+        "reference_audio_available": False,
+        "checks": checks,
+        "coverage": coverage,
+        "not_validated": ["subjective_similarity", "original_project_parameters", "reference_mix", "exact_original_transition_timing"],
+    }
+
+
 def _integer(value: Any) -> int | None:
     number = _number(value)
     if number is None or not number.is_integer():
@@ -1349,6 +1429,9 @@ def validate_output(
     band_decoded_count = 0
     subtitle_style = style.get("subtitle") if isinstance(style.get("subtitle"), dict) else {}
     min_contrast = _number(subtitle_style.get("min_contrast")) or 4.5
+    min_background_fraction = _number(subtitle_style.get("min_background_fraction"))
+    if min_background_fraction is None:
+        min_background_fraction = 0.04
     contrast_tolerance = max(0.25, min_contrast * 0.10)
     band_height = _integer(subtitle_style.get("band_height")) or 160
     native_width = actual_width or expected_width
@@ -1373,7 +1456,7 @@ def validate_output(
                     min_subtitle_contrast = (
                         contrast if min_subtitle_contrast is None else min(min_subtitle_contrast, contrast)
                     )
-                if light_fraction < 0.35 or dark_count < 16:
+                if light_fraction < min_background_fraction or dark_count < 16:
                     subtitle_missing += 1
                 elif contrast < min_contrast - contrast_tolerance:
                     subtitle_low_contrast += 1

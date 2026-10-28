@@ -82,7 +82,7 @@
 
 - 探测 1920×1080、30fps、视频流和音轨；逐帧核对数量、尺寸、PTS 与 `i/fps`。
 - 流式解码全部视频帧，检查异常黑帧、连续冻结和帧差突变的运动连续性。
-- 解码原生分辨率底部字幕带，检查活动帧的字幕带/文字存在性和对比度；H.264 检查保留压缩容差，不与无损源帧逐字节比较。
+- 解码原生分辨率底部字幕检测区域，检查活动帧的字幕检测区域/文字存在性和对比度；H.264 检查保留压缩容差，不与无损源帧逐字节比较。
 - 解码源音频和成片音轨，测量实际封装偏移并记录置信度。
 - 按默认间隔生成联系表，供人工快速复核，但联系表不是自动艺术评审。
 
@@ -104,7 +104,7 @@
 | `errors` / `warnings` | 按 `timeline`、`frames_log`、`output` 前缀归因的错误与警告。 |
 | `metrics.timeline` | 内部时间轴详细指标。 |
 | `metrics.frames_log` | 渲染日志详细指标。 |
-| `metrics.output` | 最终封装、全帧解码、字幕带和音频测量详细指标。 |
+| `metrics.output` | 最终封装、全帧解码、字幕检测区域和音频测量详细指标。 |
 
 音频测量补充字段为 `metrics.output.audio_offset_confidence`、`audio_offset_method`、`audio_offset_warning`；`audio_offset_positive_means=rendered_audio_lag` 定义正负号。`metrics.output.transition_check_scope=duration_markers_black_frames_difference_and_freeze_only` 明确限定转场自动检查范围。
 
@@ -122,3 +122,27 @@
 它不证明转场“自然”、节奏“舒服”、叙事“准确”或画面与某位作者“完全一致”。这些结论需要人工观看、试听和必要的外部参考，不能由 `transition_pass` 推断。
 
 如需验证真实人声，应另行建立可信的人工句级参考并逐句比较；当前流程不会把这类主观或外部验证自动写成 `verified`。人工修正 alignment 后仍须查看 `draft`/`final` 判定、QC 报告、联系表和关键帧，并保留 `human_vocal_sync=unverified` 的说明。
+
+## 6. 风格结构校验与艺术验收
+
+正式生成在渲染前写入 `style-qc.json`，独立预览也会生成同名报告。`validate_style_profile()` 检查：
+
+1. 参考风格档案是否存在，逐镜头叙事阶段、章节、运镜、调度、特效、声音 cue 和密度字段是否齐全；
+2. 动作、特效和运镜是否属于当前已实现的词表，裁切/横移/保持帧是否为非负整数；
+3. 物件镜头是否最多两件道具，情绪叠加是否不超过配置上限；
+4. 所有转场是否存在于 `assets/style.json`，片头片尾是否回到同场景和主天气；
+5. 汇总实际出现的镜头类型、动作、特效、运镜、转场和声音 cue 覆盖清单。
+
+结构校验失败会中止正式生成。通过时也只表示 `scope=structural_style_implementation_only`，并保留 `art_review_required=true`、`reference_audio_available=false`。它不验证主观相似度、原作者工程参数、参考混音或精确原始转场时序，也不保证每一种已实现元素都在某首特定歌曲中被歌词触发；应结合 `coverage` 判断当次覆盖范围。
+
+## 7. 独立美术预览的边界
+
+`scripts/preview.py` 用于场景、角色、镜头、动作、转场和字幕构图检查。它使用等分估计时间轴，不读取音频、不生成 MP4，也不执行本文所述的三层技术 QC。输出 `preview.json` 明确记录 `preview_only=true`、`timing_status=estimated_equal_duration`、`audio_sync=not_evaluated` 和 `human_vocal_sync=unverified`。
+
+美术修改后应实际查看三类证据：代表帧与 `contact-sheet.jpg`、动作序列与 `motion-contact-sheet.jpg`、转场过程帧与 `transition-contact-sheet.jpg`。检查角色造型和服装是否统一、动作是否可读、运镜是否保持硬边像素、转场是否连续、场景细节与信息密度是否平衡、环境天气是否随章节变化、片头片尾是否呼应，以及字幕是否完整留在安全区。自动测试、结构校验和最终 MP4 的技术 QC 均不能代替人工艺术验收。
+
+## 8. 声音设计与参考音频边界
+
+正式生成额外输出 `sound-design.json` 和 `sound-cues.wav`。后者为 48kHz、立体声、16-bit PCM 的原创程序化环境与动作 cue；封装时用户歌曲仍是主音乐，cue 以低电平混入并触发轻度侧链闪避。报告记录 cue 类型、时刻、时长、增益和混音配置，禁用声音或空镜头时也应生成合法静音 WAV。
+
+当前参考证据只有公开画面，没有参考音轨。因此 `original_reference_audio_available=false`、`music_source=user_song`、`design_status=original_programmatic_cues`，且 `generation.json.reference_mix_recreated=false`。不得把这些 cue 描述为原作者音效、原始分轨或参考混音的还原。自动音频偏移 QC 只比较最终音轨与用户源歌曲的封装关系，不证明声音设计的主观相似度；仍需人工试听歌曲主导性、cue 可辨识度、闪避是否自然和整体响度。

@@ -43,6 +43,25 @@ python scripts/mv.py --lyrics <路径或文本> --audio <音频>
 
 默认输出到**执行命令时的当前目录**下的 `outputs/<音频文件名去扩展名>-pixel-mv/`。需要固定位置时使用 `-OutputDir`；从其他工作目录调用脚本时，不要误以为默认输出一定位于 Skill 根目录。
 
+## 独立美术预览（不生成 MV）
+
+修改 Skill 美术或只需检查构图时，使用独立预览入口。先按正常入口准备 `.venv`，再在 Skill 根目录运行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/preview.py --output-dir ".\outputs\art-preview"
+```
+
+可添加 `--lyrics <路径或文本>` 和 `--style <JSON>`；省略歌词时使用内置虚构样例。`--output-dir` 必填，应使用独立目录，不要指向已有歌曲作品输出目录。
+
+预览输出三类美术证据：
+
+- 至多 12 张 1920×1080 代表帧和三列 `contact-sheet.jpg`，检查角色统一、镜头尺度、场景细节、环境变化、信息密度和紧凑字幕框。
+- `motion/<shot_id>/` 中每个代表动作的 6 个本地帧，以及 `motion-contact-sheet.jpg`，检查行走、骑行、阅读、弹奏、相拥、画心、列车、爱心、烟花和整数运镜。
+- `transitions/<shot_id>` 中每个实际转场的过程帧，以及 `transition-contact-sheet.jpg`，检查匹配裁切、有序溶解、胶片擦除、照片显现、白闪和卷轴擦除。
+- `style-qc.json` 记录叙事字段、动作/特效/运镜词表、密度、转场配置和片头片尾回环的结构校验；`preview.json` 索引全部预览并列出人工复核项目。
+
+预览使用等分估计时间轴，不读取音频、不生成视频、不做同步或完整技术 QC；`preview.json` 明确标记 `preview_only=true`、`timing_status=estimated_equal_duration`、`audio_sync=not_evaluated` 和 `human_vocal_sync=unverified`。结构校验不证明主观相似度，美术预览也不能替代正式生成后的 QC、人工看图与试听。
+
 ## 3. 可选参数
 
 | PowerShell | Python | 用途 |
@@ -63,10 +82,13 @@ python scripts/mv.py --lyrics <路径或文本> --audio <音频>
 | `draft.mp4` | 低置信/估计对齐时的完整视频草稿，或 QC 未通过时保留的草稿；与 `final.mp4` 按本次结果二选一。 |
 | `alignment.json` | 歌曲时长、语言、后端、状态、置信度、警告及逐句 `id/text/start/end/status/confidence`。 |
 | `audio-features.json` | `tempo`、`beats`、`onsets`、`rms_times`、`rms`、`section_times`、分析后端与警告。 |
-| `timeline.json` | 帧率、总帧数、种子、尺寸、逐镜头场景/角色/道具/滤镜/转场，以及逐句字幕目标时间和量化帧号。 |
+| `timeline.json` | 帧率、总帧数、种子、尺寸，以及逐镜头场景、角色、道具、滤镜、叙事阶段、章节、动作、调度、整数运镜、特效、声音 cue、密度、转场和字幕量化帧号。 |
 | `frames.jsonl` | 每帧一行的渲染记录，包括帧号、PTS、镜头、场景、字幕、转场、亮度、色板大小、字幕溢出和对比度等。 |
+| `style-qc.json` | 风格档案、导演字段、动作/特效/运镜词表、密度、转场配置和片头片尾回环的结构校验及覆盖清单；不是主观相似度评分。 |
+| `sound-design.json` | 原创环境/动作 cue 的类型、镜头、时刻、时长、增益、混音参数和参考音频不可用声明。 |
+| `sound-cues.wav` | 48kHz、立体声、16-bit PCM 的原创程序化 cue 轨；不是参考作品音轨。 |
 | `qc.json` | 时间轴、渲染日志和最终 MP4 的汇总检查、五项门禁、误差、音频偏移、错误与警告。 |
-| `generation.json` | 最终输出路径、QC/联系表路径、`passed`、`draft`、对齐状态、音频偏移、是否校正、帧数和 `human_vocal_sync`。 |
+| `generation.json` | 最终输出路径、QC/联系表路径、风格档案与结构校验、声音设计与 cue 数量、`passed`、`draft`、对齐状态、音频偏移、是否校正和 `human_vocal_sync`；`reference_mix_recreated=false`。 |
 | `contact-sheet.jpg` | 默认每 5 秒抽样的全片联系表，带时间戳，用于快速浏览。 |
 | `keyframes/` | 每个镜头 start/mid/end 的 PNG 关键帧；为放大并合成字幕后的高分辨率画面。 |
 

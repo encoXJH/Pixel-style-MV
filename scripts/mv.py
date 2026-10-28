@@ -12,6 +12,7 @@ from typing import Any
 import media
 import qc
 import render
+import sound
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -45,8 +46,9 @@ def _mux_audio(
     output: Path,
     style: dict,
     shift_seconds: float = 0.0,
+    sound_cues: str | Path | None = None,
 ) -> None:
-    """封装原音频；shift_seconds 为正值时延后，为负值时提前。"""
+    """封装歌曲并可混入原创 cue；shift_seconds 为正值时延后，为负值时提前。"""
     if not math.isfinite(shift_seconds):
         raise ValueError("音频校正量必须是有限数值")
     config = style["render"]
@@ -63,38 +65,37 @@ def _mux_audio(
         filters.append(f"adelay={shift_seconds * 1000.0:.6f}:all=1")
     filters.append(f"aresample={sample_rate}:async=1:first_pts=0")
     output.parent.mkdir(parents=True, exist_ok=True)
-    _run(
+    command = [
+        "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+        "-i", str(video_only), "-i", str(source_audio),
+    ]
+    if sound_cues is not None:
+        command.extend(["-i", str(sound_cues)])
+        music_chain = ",".join(filters)
+        duck_db = max(0.0, float(style.get("sound", {}).get("music_duck_db", 3.0)))
+        ratio = max(1.0, 10 ** (duck_db / 20.0))
+        command.extend(
+            [
+                "-filter_complex",
+                (
+                    f"[1:a]{music_chain},aformat=sample_fmts=fltp:channel_layouts=stereo[music];"
+                    f"[2:a]aresample={sample_rate},asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:channel_layouts=stereo[cue];"
+                    "[cue]asplit=2[cue_mix][cue_key];"
+                    f"[music][cue_key]sidechaincompress=threshold=0.02:ratio={ratio:.4f}:attack=20:release=250[ducked];"
+                    "[ducked][cue_mix]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
+                ),
+                "-map", "0:v:0", "-map", "[aout]",
+            ]
+        )
+    else:
+        command.extend(["-map", "0:v:0", "-map", "1:a:0", "-af", ",".join(filters)])
+    command.extend(
         [
-            "ffmpeg",
-            "-nostdin",
-            "-y",
-            "-loglevel",
-            "error",
-            "-i",
-            str(video_only),
-            "-i",
-            str(source_audio),
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            str(config.get("audio_bitrate", "256k")),
-            "-ar",
-            str(sample_rate),
-            "-af",
-            ",".join(filters),
-            "-movflags",
-            "+faststart",
-            "-sn",
-            "-dn",
-            str(output),
+            "-c:v", "copy", "-c:a", "aac", "-b:a", str(config.get("audio_bitrate", "256k")),
+            "-ar", str(sample_rate), "-movflags", "+faststart", "-sn", "-dn", str(output),
         ]
     )
+    _run(command)
 
 
 def _provided_alignment(
@@ -207,6 +208,12 @@ def generate(
     _write_json(destination / "alignment.json", alignment)
     timeline = render.plan_timeline(alignment, features, style)
     _write_json(destination / "timeline.json", timeline)
+    style_report = qc.validate_style_profile(timeline, style)
+    _write_json(destination / "style-qc.json", style_report)
+    if not style_report["passed"]:
+        raise RuntimeError("风格结构校验未通过，请检查 style-qc.json")
+    sound_manifest = sound.create_sound_design(timeline, style, destination)
+    sound_cues = destination / sound_manifest["file"] if sound_manifest["cue_count"] else None
 
     print(f"[3/5] 渲染 {timeline['frame_count']} 帧像素画面…", flush=True)
     video_only = work / "video-only.mp4"
@@ -218,9 +225,9 @@ def generate(
         destination / "keyframes",
     )
 
-    print("[4/5] 封装原音频并执行全帧 QC…", flush=True)
+    print("[4/5] 封装歌曲与原创声音 cue 并执行全帧 QC…", flush=True)
     candidate = work / "muxed.mp4"
-    _mux_audio(video_only, audio, candidate, style)
+    _mux_audio(video_only, audio, candidate, style, sound_cues=sound_cues)
     initial_qc_path = work / "qc-initial.json"
     report = qc.run_qc(
         candidate,
@@ -244,7 +251,7 @@ def generate(
     ):
         print(f"      检测到音频偏移 {float(offset):.3f}ms，自动校正后复测…", flush=True)
         corrected_candidate = work / "muxed-corrected.mp4"
-        _mux_audio(video_only, audio, corrected_candidate, style, -float(offset) / 1000.0)
+        _mux_audio(video_only, audio, corrected_candidate, style, -float(offset) / 1000.0, sound_cues)
         candidate = corrected_candidate
         corrected = True
         report = qc.run_qc(
@@ -284,6 +291,11 @@ def generate(
         "audio_offset_ms": report.get("audio_offset_ms"),
         "corrected": corrected,
         "frame_count": render_result["frame_count"],
+        "style_profile": timeline.get("style_profile"),
+        "style_qc": str(destination / "style-qc.json"),
+        "sound_design": str(destination / "sound-design.json"),
+        "sound_cue_count": sound_manifest["cue_count"],
+        "reference_mix_recreated": False,
         "human_vocal_sync": "unverified",
     }
     _write_json(destination / "generation.json", result)

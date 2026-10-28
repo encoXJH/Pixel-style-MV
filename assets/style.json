@@ -1,7 +1,63 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "style_name": "pixel-narrative-mv",
   "seed": 20261027,
+  "reference_profile": {
+    "id": "ailo-public-pixel-narrative-v1",
+    "evidence_scope": "29_public_posts_visual_frames_only",
+    "story": {
+      "structure": ["title_or_object_prologue", "daily_montage", "separation", "memory_insert", "climax", "motif_return"],
+      "continuity": "single_theme_with_recurring_props_and_weather",
+      "shot_pattern": "alternating_establishing_two_shot_closeup_and_object",
+      "primary_action_per_shot": 1,
+      "ending": "return_to_opening_scene_weather_and_motif"
+    },
+    "camera": {
+      "projection": "side_view_or_frontal_stage",
+      "movement": "integer_pixel_push_pull_pan_and_static_hold",
+      "forbidden": ["motion_blur", "optical_flow", "subpixel_resampling"]
+    },
+    "composition": {
+      "devices": ["split_weather", "thought_bubble", "instant_photo", "film_frame", "object_insert", "frontal_stage"],
+      "character_scale_by_shot": {"landscape": 0, "wide": 50, "medium": 74, "close": 104, "object": 0}
+    },
+    "color": {
+      "pixel_edges": "hard_clusters_with_ordered_dither",
+      "day": "muted_sky_and_cream",
+      "sunset": "warm_coral_and_amber",
+      "night_rain": "indigo_with_warm_practical_lights",
+      "memory": "restrained_amber_not_full_sepia"
+    },
+    "performance": {
+      "pose_system": "held_pixel_poses_with_blinks_and_one_pixel_idle",
+      "actions": ["waiting", "walking", "cycling", "reading", "talking", "playing", "photographing", "embrace", "heart_glass", "train"],
+      "acting_rule": "one_readable_primary_action_plus_environmental_motion"
+    },
+    "effects": {
+      "weather": ["rain", "snow", "sea_glints", "stars"],
+      "emotional": ["pixel_hearts", "thought_bubble", "memory_sparkles"],
+      "climax": ["fireworks", "stage_lights"],
+      "texture": ["ordered_dither", "film_perforations", "restrained_vignette"]
+    },
+    "guidance": {
+      "mode": "diegetic_narrative_props",
+      "props": ["phone", "letter", "ticket", "station_sign", "photo"],
+      "social_cta": false
+    },
+    "information_density": {
+      "background_layers": 5,
+      "max_object_props": 2,
+      "max_simultaneous_emotional_overlays": 2,
+      "subtitle_area": "bottom_center_compact_box",
+      "rule": "detailed_environment_with_uncluttered_primary_action"
+    },
+    "sound": {
+      "reference_audio_available": false,
+      "music": "user_supplied_song_remains_primary",
+      "implementation": "original_low_level_programmatic_cues_with_music_ducking",
+      "not_claimed": ["reference_mix", "reference_sound_effects", "original_stems"]
+    }
+  },
   "render": {
     "fps": 30,
     "low_width": 480,
@@ -42,20 +98,58 @@
     "black": "#17151C",
     "yellow": "#F2D16B",
     "blue": "#355C9A",
-    "green": "#3F7658"
+    "green": "#3F7658",
+    "sky_light": "#A9C8D8",
+    "sky_shadow": "#52657C",
+    "glass_light": "#C6DDE2",
+    "fog": "#A6B5C3",
+    "fog_light": "#B4C1CD",
+    "fog_sea": "#AA9FB4",
+    "fog_ground": "#9FB4AB",
+    "sea_light": "#83B6C4",
+    "sea_mid": "#477F98",
+    "sea_dark": "#2D4E64",
+    "steel_light": "#B4B5B2",
+    "steel_mid": "#737B82",
+    "steel_dark": "#363E49",
+    "wood_light": "#C18B68",
+    "wood_dark": "#513D38",
+    "train_cream": "#F2E7D3",
+    "signal_yellow": "#E6B85C",
+    "skin": "#F2C4A8",
+    "hair": "#24262B",
+    "sun": "#F6C76B",
+    "sand": "#D6B58A",
+    "stone_light": "#C8C0B4",
+    "stone_mid": "#918D88",
+    "stone_dark": "#57555A",
+    "station_wet": "#C48878",
+    "station_wet_line": "#9A655C",
+    "house": "#9E5F63",
+    "plaster": "#E4D5C2"
   },
   "subtitle": {
-    "band_height": 160,
+    "band_height": 220,
     "background": "cream",
     "text_color": "ink",
-    "accent_color": "red",
-    "font_size": 42,
+    "accent_color": "coral",
+    "border_color": "ink",
+    "font_size": 60,
     "max_lines": 2,
     "max_chars_per_line": 24,
-    "line_spacing": 12,
+    "line_spacing": 10,
     "margin_x": 120,
     "margin_y": 28,
-    "safe_margin": 48,
+    "safe_margin": 32,
+    "bottom_margin": 28,
+    "max_box_width": 1320,
+    "min_box_width": 420,
+    "box_padding_x": 24,
+    "box_padding_y": 12,
+    "note_gap": 18,
+    "border_width": 6,
+    "corner_radius": 0,
+    "min_background_fraction": 0.04,
     "min_contrast": 4.5,
     "note": "♪"
   },
@@ -63,6 +157,7 @@
     "default": {"overlay": null, "strength": 0.0, "dither": 0.06, "vignette": 0.0},
     "memory": {"overlay": "amber", "strength": 0.08, "dither": 0.08, "vignette": 0.06},
     "rain_night": {"overlay": "indigo", "strength": 0.18, "dither": 0.1, "vignette": 0.08},
+    "station_rain": {"overlay": "coral", "strength": 0.07, "dither": 0.08, "vignette": 0.03},
     "dawn": {"overlay": "coral", "strength": 0.08, "dither": 0.06, "vignette": 0.03},
     "stage": {"overlay": "violet", "strength": 0.12, "dither": 0.1, "vignette": 0.08}
   },
@@ -71,13 +166,42 @@
     "parallax_pixels": 2,
     "particle_count": 24,
     "blink_frames": 2,
-    "pose_hold_frames": 3
+    "pose_hold_frames": 3,
+    "firework_particles": 18,
+    "pixel_hearts": 6
+  },
+  "camera": {
+    "enabled": true,
+    "max_crop_pixels": 12,
+    "pan_pixels": 8,
+    "motion_hold_frames": 2,
+    "default_by_shot": {"landscape": "pan_right", "wide": "pan_right", "medium": "push_in", "close": "static", "object": "push_in"}
+  },
+  "density": {
+    "background_layers": 5,
+    "max_object_props": 2,
+    "max_emotional_overlays": 2,
+    "max_weather_drops": 64,
+    "max_snowflakes": 52
+  },
+  "sound": {
+    "enabled": true,
+    "sample_rate": 48000,
+    "cue_gain": 0.11,
+    "max_cue_gain": 0.22,
+    "fade_seconds": 0.08,
+    "music_duck_db": 3.0,
+    "mix_normalize": false
   },
   "transitions": {
     "hard_cut": {"duration_frames": 0},
     "white_flash": {"duration_frames": 4, "max_per_video": 2},
     "iris_out": {"duration_frames": 18, "ending_only": true},
-    "scroll_wipe": {"duration_frames": 12, "max_per_video": 1}
+    "scroll_wipe": {"duration_frames": 12, "max_per_video": 1},
+    "match_cut": {"duration_frames": 6, "max_per_video": 2},
+    "memory_dissolve": {"duration_frames": 10, "max_per_video": 2},
+    "film_wipe": {"duration_frames": 12, "max_per_video": 1},
+    "photo_reveal": {"duration_frames": 12, "max_per_video": 1}
   },
   "characters": {
     "protagonist": {"hair": "ink", "coat": "cream", "trousers": "indigo", "accent": "red", "height_pixels": 48},
@@ -152,6 +276,8 @@
     "player": ["播放器", "唱片", "磁带", "record", "cassette", "player"],
     "scroll": ["卷轴", "书信", "scroll"],
     "bicycle": ["单车", "自行车", "bicycle", "bike"],
+    "book": ["书", "阅读", "课本", "book", "reading"],
+    "camera": ["拍照", "相机", "快门", "camera", "photograph"],
     "microphone": ["麦克风", "舞台", "microphone", "stage"]
   },
   "qc": {
