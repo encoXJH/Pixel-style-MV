@@ -1,9 +1,9 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "style_name": "pixel-narrative-mv",
   "seed": 20261027,
   "reference_profile": {
-    "id": "ailo-public-pixel-narrative-v2",
+    "id": "ailo-public-pixel-narrative-v3",
     "evidence_scope": "30_public_posts_and_380s_appear_leave_reference_visual_analysis",
     "story": {
       "structure": ["title_or_object_prologue", "daily_montage", "separation", "memory_insert", "instrumental_montage", "climax", "motif_return"],
@@ -60,11 +60,11 @@
   },
   "render": {
     "fps": 30,
-    "low_width": 480,
-    "low_height": 270,
+    "low_width": 320,
+    "low_height": 180,
     "scale": 4,
-    "width": 1920,
-    "height": 1080,
+    "width": 1280,
+    "height": 720,
     "crf": 14,
     "preset": "medium",
     "pixel_format": "yuv420p",

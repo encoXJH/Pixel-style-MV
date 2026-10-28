@@ -1213,29 +1213,29 @@ def _portrait(draw, colors: dict, role: str, cx: int, expression: str, blink: bo
              (cx + 55, 78), (cx + 47, 117), (cx - 44, 117)), fill=hair, outline=ink,
         )
     draw.polygon(
-        ((cx - 86, 270), (cx - 80, 238), (cx - 62, 218), (cx - 28, 204),
-         (cx + 28, 204), (cx + 62, 218), (cx + 80, 238), (cx + 86, 270)),
+        ((cx - 86, 270), (cx - 80, 228), (cx - 62, 208), (cx - 28, 194),
+         (cx + 28, 194), (cx + 62, 208), (cx + 80, 228), (cx + 86, 270)),
         fill=coat, outline=ink,
     )
-    _rect(draw, (cx - 16, 170, cx + 16, 211), skin, ink)
+    _rect(draw, (cx - 16, 170, cx + 16, 201), skin, ink)
     if companion:
-        draw.polygon(((cx - 28, 204), (cx, 222), (cx + 28, 204), (cx + 18, 198),
-                      (cx, 210), (cx - 18, 198)), fill=colors["warm_white"], outline=ink)
-        _rect(draw, (cx - 3, 211, cx + 3, 217), colors["coral"])
+        draw.polygon(((cx - 28, 194), (cx, 212), (cx + 28, 194), (cx + 18, 188),
+                      (cx, 200), (cx - 18, 188)), fill=colors["warm_white"], outline=ink)
+        _rect(draw, (cx - 3, 201, cx + 3, 207), colors["coral"])
         _rect(draw, (cx + 36, 222, cx + 40, 269), colors["steel_light"])
     else:
-        draw.polygon(((cx - 29, 203), (cx - 4, 213), (cx - 16, 231), (cx - 37, 211)),
+        draw.polygon(((cx - 29, 193), (cx - 4, 203), (cx - 16, 221), (cx - 37, 201)),
                      fill=colors["warm_white"], outline=ink)
-        draw.polygon(((cx + 29, 203), (cx + 4, 213), (cx + 16, 231), (cx + 37, 211)),
+        draw.polygon(((cx + 29, 193), (cx + 4, 203), (cx + 16, 221), (cx + 37, 201)),
                      fill=colors["warm_white"], outline=ink)
-        _rect(draw, (cx - 2, 222, cx + 2, 269), colors["indigo"])
+        _rect(draw, (cx - 2, 212, cx + 2, 269), colors["indigo"])
         _rect(draw, (cx - 58, 238, cx - 52, 242), colors["sky_light"])
     _rect(draw, (cx - 52, 105, cx - 41, 137), skin, ink)
     _rect(draw, (cx + 41, 105, cx + 52, 137), skin, ink)
     draw.polygon(
-        ((cx - 41, 65), (cx + 39, 65), (cx + 47, 91), (cx + 43, 139),
-         (cx + 29, 164), (cx + 10, 179), (cx - 10, 179), (cx - 30, 165),
-         (cx - 44, 140), (cx - 48, 92)), fill=skin, outline=ink,
+        ((cx - 43, 65), (cx + 41, 65), (cx + 50, 91), (cx + 49, 128),
+         (cx + 41, 151), (cx + 27, 170), (cx + 11, 179), (cx - 11, 179),
+         (cx - 29, 169), (cx - 43, 151), (cx - 51, 128), (cx - 50, 92)), fill=skin, outline=ink,
     )
     if companion:
         draw.polygon(
@@ -1270,21 +1270,21 @@ def _portrait(draw, colors: dict, role: str, cx: int, expression: str, blink: bo
     else:
         for eye_x in (cx - 23, cx + 23):
             _rect(draw, (eye_x - 6, 116, eye_x + 6, 132), colors["warm_white"], ink, 2)
-            _rect(draw, (eye_x - 2, 120, eye_x + 2, 130), colors["sea_dark"] if companion else ink)
-            _rect(draw, (eye_x - 1, 120, eye_x, 122), colors["warm_white"])
+            _rect(draw, (eye_x - 3, 119, eye_x + 3, 131), colors["sea_dark"] if companion else ink)
+            _rect(draw, (eye_x - 2, 119, eye_x, 122), colors["warm_white"])
             if expression == "sad":
                 _line(draw, ((eye_x - 6, 117), (eye_x + 5, 120)), hair, 2)
     _rect(draw, (cx - 39, 140, cx - 30, 145), colors["pink"])
     _rect(draw, (cx + 30, 140, cx + 39, 145), colors["pink"])
-    _rect(draw, (cx - 2, 132, cx + 3, 145), colors["wood_light"])
+    _rect(draw, (cx - 1, 136, cx + 2, 142), colors["wood_light"])
     if expression == "happy":
         _line(draw, ((cx - 13, 153), (cx - 7, 160), (cx, 162), (cx + 7, 160), (cx + 13, 153)), ink, 3)
         _rect(draw, (cx - 6, 158, cx + 6, 161), colors["coral"])
     elif expression == "sad":
         _line(draw, ((cx - 12, 163), (cx - 6, 156), (cx, 154), (cx + 6, 156), (cx + 12, 163)), ink, 3)
     else:
-        _rect(draw, (cx - 10, 156, cx + 10, 159), colors["wood_dark"])
-        _rect(draw, (cx - 6, 160, cx + 6, 161), colors["pink"])
+        _rect(draw, (cx - 7, 156, cx + 7, 159), colors["wood_dark"])
+        _rect(draw, (cx - 4, 160, cx + 4, 161), colors["pink"])
 
 
 def _dual_portrait(shot: dict, colors: dict, local_frame: int) -> Image.Image:

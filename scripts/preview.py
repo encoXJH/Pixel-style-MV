@@ -361,7 +361,7 @@ def generate_preview(lines: list[str], style: dict, output_dir: str | Path) -> d
     (output / "style-qc.json").write_text(json.dumps(style_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "preview_only": True,
         "purpose": "art_and_composition_review",
         "timing_status": "estimated_equal_duration",

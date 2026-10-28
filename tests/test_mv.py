@@ -170,7 +170,7 @@ class MediaAndTimelineTests(unittest.TestCase):
         aligned["lines"][1].update(text="雨夜红伞", start=1.8, end=3.8)
         features = {"beats": [1.82], "onsets": [], "rms_times": [0, 2, 4], "rms": [0.2, 0.8, 0.3]}
         timeline = render.plan_timeline(aligned, features, self.style)
-        self.assertEqual(timeline["art_version"], 3)
+        self.assertEqual(timeline["art_version"], 4)
         self.assertEqual(timeline["story_theme"], "campus")
         self.assertEqual(timeline["shots"][0]["scene"], "campus")
         self.assertEqual(timeline["shots"][1]["scene"], "rain_street")
@@ -193,7 +193,7 @@ class MediaAndTimelineTests(unittest.TestCase):
             self.assertLessEqual(abs(subtitle["error_start_ms"]), 50.0)
             self.assertEqual(subtitle["start_frame"], int(np.ceil(subtitle["target_start"] * 30)))
 
-    def test_art_v3_story_arc_shot_types_and_loop(self) -> None:
+    def test_art_v4_story_arc_shot_types_and_loop(self) -> None:
         timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
         shots = timeline["shots"]
         first, last = shots[0], shots[-1]
@@ -216,7 +216,7 @@ class MediaAndTimelineTests(unittest.TestCase):
         heart = next(shot for shot in shots if shot["action"] == "heart_glass")
         self.assertEqual(heart["shot_type"], "object")
         self.assertEqual(heart["props"], [])
-        self.assertTrue({shot["art_version"] for shot in shots} == {3})
+        self.assertTrue({shot["art_version"] for shot in shots} == {4})
         self.assertGreaterEqual(
             {shot["shot_type"] for shot in shots},
             {"landscape", "wide", "medium", "close", "object"},
@@ -229,7 +229,7 @@ class MediaAndTimelineTests(unittest.TestCase):
         self.assertLessEqual(len(object_shot["props"]), 2)
         self.assertNotIn("cat", object_shot["props"])
 
-    def test_art_v3_frames_have_motion_and_compact_subtitles(self) -> None:
+    def test_art_v4_frames_have_motion_and_compact_subtitles(self) -> None:
         timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
         font = render.find_font(self.style)
         for shot in timeline["shots"]:
@@ -238,7 +238,7 @@ class MediaAndTimelineTests(unittest.TestCase):
                 context["font_path"] = font
                 first = render._render_low_frame(shot, 0, self.style, context)
                 later = render._render_low_frame(shot, 8, self.style, context)
-                self.assertEqual(first.size, (480, 270))
+                self.assertEqual(first.size, (320, 180))
                 self.assertNotEqual(first.tobytes(), later.tobytes())
         closing = timeline["shots"][-1]
         context = render._shot_context(closing, self.style)
@@ -253,17 +253,17 @@ class MediaAndTimelineTests(unittest.TestCase):
             previous = current
         self.assertLess(max_freeze_run, 90)
         subtitle = timeline["subtitles"][0]
-        prepared = render._prepare_subtitle(subtitle, self.style, font, 1920, 1080)
+        prepared = render._prepare_subtitle(subtitle, self.style, font, 1280, 720)
         x0, y0, x1, y1 = prepared["box_bounds"]
         self.assertGreater(x0, 32)
-        self.assertLess(x1, 1888)
+        self.assertLess(x1, 1248)
         self.assertGreaterEqual(y0, 32)
-        self.assertLessEqual(y1, 1048)
-        self.assertLess(x1 - x0, 1920)
+        self.assertLessEqual(y1, 688)
+        self.assertLess(x1 - x0, 1280)
         self.assertEqual(prepared["font"].size, 42)
         self.assertEqual(prepared["corner_radius"], 0)
         self.assertEqual(prepared["border_width"], 4)
-        self.assertEqual(prepared["band_top"], 900)
+        self.assertEqual(prepared["band_top"], 540)
 
     def test_reference_split_and_closeup_pixels(self) -> None:
         timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
@@ -272,17 +272,17 @@ class MediaAndTimelineTests(unittest.TestCase):
         context = render._shot_context(opening, self.style)
         context["font_path"] = font
         split = render._render_low_frame(opening, 20, self.style, context)
-        self.assertNotEqual(split.crop((0, 0, 239, 270)).tobytes(), split.crop((241, 0, 480, 270)).tobytes())
+        self.assertNotEqual(split.crop((0, 0, 159, 180)).tobytes(), split.crop((161, 0, 320, 180)).tobytes())
         ink = render._rgb("ink", self.style["palette"])
-        self.assertEqual(split.getpixel((239, 135)), ink)
-        self.assertEqual(split.getpixel((240, 135)), ink)
+        self.assertEqual(split.getpixel((159, 90)), ink)
+        self.assertEqual(split.getpixel((160, 90)), ink)
         for action in ("embrace", "heart_glass"):
             shot = next(item for item in timeline["shots"] if item["action"] == action)
             context = render._shot_context(shot, self.style)
             context["font_path"] = font
             frame = render._render_low_frame(shot, 30, self.style, context)
-            self.assertEqual(frame.size, (480, 270))
-            self.assertGreater(len(frame.getcolors(maxcolors=480 * 270) or []), 12)
+            self.assertEqual(frame.size, (320, 180))
+            self.assertGreater(len(frame.getcolors(maxcolors=320 * 180) or []), 12)
 
     def test_semantic_scenes_and_epilogue_montage(self) -> None:
         aligned = {
@@ -311,7 +311,7 @@ class MediaAndTimelineTests(unittest.TestCase):
         last_cue_end = timeline["lyric_cues"][-1]["end_frame"]
         self.assertTrue(all(row["visual_line_id"] is None for row in render.build_frame_bindings(timeline)[last_cue_end:]))
 
-    def test_reference_v3_compositions_enter_timeline(self) -> None:
+    def test_reference_v4_compositions_enter_timeline(self) -> None:
         shots = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)["shots"]
         self.assertIn("train_interior", {shot["scene"] for shot in shots})
         self.assertGreaterEqual(
@@ -322,6 +322,18 @@ class MediaAndTimelineTests(unittest.TestCase):
             {shot["action"] for shot in shots},
             {"title_board", "embrace", "heart_glass"},
         )
+
+    def test_v4_output_grid_is_fixed_4x4_blocks(self) -> None:
+        timeline = preview.preview_timeline(list(preview._SAMPLE_LYRICS), self.style)
+        self.assertEqual((timeline["width"], timeline["height"]), (1280, 720))
+        self.assertEqual((timeline["low_width"], timeline["low_height"]), (320, 180))
+        shot = timeline["shots"][1]
+        context = render._shot_context(shot, self.style)
+        context["font_path"] = render.find_font(self.style)
+        low = render._render_low_frame(shot, 20, self.style, context)
+        high = low.resize((1280, 720), Image.Resampling.NEAREST)
+        blocks = np.asarray(high).reshape(180, 4, 320, 4, 3)
+        self.assertTrue((blocks == blocks[:, 0:1, :, 0:1, :]).all())
 
     def test_iris_transition_reaches_black(self) -> None:
         current = Image.new("RGB", (480, 270), (255, 255, 255))
@@ -349,7 +361,7 @@ class MediaAndTimelineTests(unittest.TestCase):
             context["font_path"] = font
             first = render._render_low_frame(shot, 0, self.style, context)
             later = render._render_low_frame(shot, 12, self.style, context)
-            self.assertEqual(first.size, (480, 270))
+            self.assertEqual(first.size, (320, 180))
             self.assertNotEqual(first.tobytes(), later.tobytes())
 
     def test_reference_transition_renderers(self) -> None:
@@ -603,13 +615,13 @@ class MediaAndTimelineTests(unittest.TestCase):
             {"text": "这是一句用于检查自动换行和安全区的较长虚构歌词"},
             self.style,
             font,
-            1920,
-            1080,
+            1280,
+            720,
         )
         self.assertFalse(prepared["overflow"])
         self.assertLessEqual(len(prepared["lines"]), 2)
         with self.assertRaisesRegex(ValueError, "过长|安全区"):
-            render._prepare_subtitle({"text": "超长歌词" * 100}, self.style, font, 1920, 1080)
+            render._prepare_subtitle({"text": "超长歌词" * 100}, self.style, font, 1280, 720)
         with mock.patch("render.Path.is_file", return_value=True), mock.patch(
             "render.ImageFont.truetype", side_effect=OSError("no font")
         ):

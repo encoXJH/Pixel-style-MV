@@ -1535,10 +1535,10 @@ def validate_output(
     expected_frame_count = _integer(timeline.get("frame_count")) or 0
     expected_fps = _fps(timeline, style)
     render_style = style.get("render") if isinstance(style.get("render"), dict) else {}
-    expected_width = _integer(render_style.get("width")) or 1920
-    expected_height = _integer(render_style.get("height")) or 1080
-    low_width = _integer(render_style.get("low_width")) or 480
-    low_height = _integer(render_style.get("low_height")) or 270
+    expected_width = _integer(render_style.get("width")) or 1280
+    expected_height = _integer(render_style.get("height")) or 720
+    low_width = _integer(render_style.get("low_width")) or 320
+    low_height = _integer(render_style.get("low_height")) or 180
     max_sync_ms = _max_sync_ms(style)
     qc_style = style.get("qc") if isinstance(style.get("qc"), dict) else {}
     black_threshold = _number(qc_style.get("black_frame_mean_luma"))

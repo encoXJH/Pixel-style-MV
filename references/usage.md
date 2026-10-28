@@ -55,7 +55,7 @@ python scripts/mv.py --lyrics <路径或文本> --audio <音频>
 
 预览输出五类美术证据：
 
-- 至多 12 张 1920×1080 代表帧和三列 `contact-sheet.jpg`，检查角色统一、镜头尺度、场景细节、环境变化、信息密度和紧凑字幕框。
+- 至多 12 张 1280×720 代表帧和三列 `contact-sheet.jpg`，检查 Q 版角色统一、镜头尺度、场景细节、环境变化、信息密度和紧凑字幕框。
 - `motion/<shot_id>/` 中每个代表动作的 6 个本地帧，以及 `motion-contact-sheet.jpg`，检查翻牌、行走、骑行、阅读、弹奏、相拥、轨迹画心、列车、爱心、烟花和整数运镜。
 - `transitions/<shot_id>` 中每个实际转场的过程帧，以及 `transition-contact-sheet.jpg`，检查匹配裁切、有序溶解、胶片擦除、照片显现、白闪和卷轴擦除。
 - `weather/` 与 `weather-contact-sheet.jpg`：晴天、多云、雨天、雪天、晚霞、夜晚各 3 帧，检查独立配色、环境层次和粒子动态。
@@ -72,7 +72,7 @@ python scripts/mv.py --lyrics <路径或文本> --audio <音频>
 | `-Alignment <JSON>` | `--alignment <JSON>` | 使用人工修正的句级时间轴重跑。 |
 | `-Style <JSON>` | `--style <JSON>` | 替换默认 `assets/style.json`，仅供高级调整。 |
 
-自定义样式不会改变当前固定渲染契约：30fps、480×270 工作画布、4 倍放大和 1920×1080 输出会被时间轴校验强制检查。不要通过放宽 QC 阈值把不合格结果包装成通过。
+自定义样式不会改变当前固定渲染契约：30fps、320×180 最终像素画布、4 倍放大和 1280×720 输出会被时间轴校验强制检查。不要通过放宽 QC 阈值把不合格结果包装成通过。
 
 ## 4. 输出文件
 

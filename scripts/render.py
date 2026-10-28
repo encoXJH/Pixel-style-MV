@@ -880,7 +880,7 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
                 "props": list(base["props"]),
                 "characters": list(base["characters"]),
                 "filter": base["filter"],
-                "art_version": 3,
+                "art_version": 4,
                 "shot_type": base["shot_type"] if chunk_start == first_frame else ("medium" if base["shot_type"] == "wide" else base["shot_type"]),
                 "weather": base["weather"],
                 "compare_weather": base["compare_weather"],
@@ -1059,7 +1059,7 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         alignment_status = str(alignment.get("alignment_status", alignment.get("status", "aligned")))
 
     timeline = {
-        "schema_version": 3,
+        "schema_version": 4,
         "style_profile": style.get("reference_profile", {}).get("id", "pixel-narrative-mv"),
         "fps": fps,
         "duration": duration,
@@ -1070,7 +1070,7 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         "low_height": int(render["low_height"]),
         "scale": int(render["scale"]),
         "seed": top_seed,
-        "art_version": 3,
+        "art_version": 4,
         "story_theme": theme,
         "subtitle_band_height": int(style.get("subtitle", {}).get("band_height", 160)),
         "alignment_status": alignment_status,
@@ -1119,8 +1119,10 @@ def _validate_timeline(timeline: dict) -> None:
     scale = int(timeline["scale"])
     frame_count = int(timeline["frame_count"])
     duration = _number(timeline["duration"], "timeline.duration")
-    if (fps, width, height, low_width, low_height, scale) != (30, 1920, 1080, 480, 270, 4):
-        raise ValueError("渲染规格必须为 30fps、480×270 低画布、4 倍放大和 1920×1080 输出")
+    art_version = int(timeline.get("art_version", 2))
+    expected = (30, 1280, 720, 320, 180, 4) if art_version >= 4 else (30, 1920, 1080, 480, 270, 4)
+    if (fps, width, height, low_width, low_height, scale) != expected:
+        raise ValueError("渲染规格必须为 30fps；v4 使用 320×180→1280×720，旧版使用 480×270→1920×1080，均为 4 倍整数放大")
     if frame_count != int(math.ceil(duration * fps)):
         raise ValueError("frame_count 必须等于 ceil(duration × fps)")
     shots = timeline["shots"]
@@ -1665,7 +1667,10 @@ def _render_low_frame(shot: dict, local_frame: int, style: dict, context: dict) 
     if int(shot.get("art_version", 1)) >= 2:
         image = art.render_art_frame(shot, local_frame, style, context)
         image = _apply_camera(image, shot, local_frame)
-        return _apply_filter(image, str(shot.get("filter", "default")), style)
+        image = _apply_filter(image, str(shot.get("filter", "default")), style)
+        if int(shot.get("art_version", 1)) >= 4:
+            return image.resize((320, 180), Image.Resampling.NEAREST)
+        return image
     image = Image.new("RGB", (480, 270), _rgb("cream", style.get("palette", {})))
     _draw_scene_background(image, shot, local_frame, style, context)
     draw = ImageDraw.Draw(image)
