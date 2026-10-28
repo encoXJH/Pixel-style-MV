@@ -1,13 +1,13 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "style_name": "pixel-narrative-mv",
   "seed": 20261027,
   "reference_profile": {
-    "id": "ailo-public-pixel-narrative-v1",
-    "evidence_scope": "29_public_posts_visual_frames_only",
+    "id": "ailo-public-pixel-narrative-v2",
+    "evidence_scope": "30_public_posts_and_380s_appear_leave_reference_visual_analysis",
     "story": {
-      "structure": ["title_or_object_prologue", "daily_montage", "separation", "memory_insert", "climax", "motif_return"],
-      "continuity": "single_theme_with_recurring_props_and_weather",
+      "structure": ["title_or_object_prologue", "daily_montage", "separation", "memory_insert", "instrumental_montage", "climax", "motif_return"],
+      "continuity": "semantic_scene_direction_with_single_theme_recurring_props_and_weather",
       "shot_pattern": "alternating_establishing_two_shot_closeup_and_object",
       "primary_action_per_shot": 1,
       "ending": "return_to_opening_scene_weather_and_motif"
@@ -18,7 +18,7 @@
       "forbidden": ["motion_blur", "optical_flow", "subpixel_resampling"]
     },
     "composition": {
-      "devices": ["split_weather", "thought_bubble", "instant_photo", "film_frame", "object_insert", "frontal_stage"],
+      "devices": ["departure_board", "train_interior", "bench_pair", "dual_portrait", "split_weather", "thought_bubble", "instant_photo", "film_frame", "object_insert", "frontal_stage"],
       "character_scale_by_shot": {"landscape": 0, "wide": 50, "medium": 74, "close": 104, "object": 0}
     },
     "color": {
@@ -30,7 +30,7 @@
     },
     "performance": {
       "pose_system": "held_pixel_poses_with_blinks_and_one_pixel_idle",
-      "actions": ["waiting", "walking", "cycling", "reading", "talking", "playing", "photographing", "embrace", "heart_glass", "train"],
+      "actions": ["title_board", "waiting", "walking", "cycling", "reading", "talking", "playing", "photographing", "embrace", "heart_glass", "train"],
       "acting_rule": "one_readable_primary_action_plus_environmental_motion"
     },
     "effects": {
@@ -129,25 +129,25 @@
     "plaster": "#E4D5C2"
   },
   "subtitle": {
-    "band_height": 220,
+    "band_height": 180,
     "background": "cream",
     "text_color": "ink",
     "accent_color": "coral",
     "border_color": "ink",
-    "font_size": 60,
+    "font_size": 42,
     "max_lines": 2,
-    "max_chars_per_line": 24,
-    "line_spacing": 10,
+    "max_chars_per_line": 26,
+    "line_spacing": 8,
     "margin_x": 120,
     "margin_y": 28,
     "safe_margin": 32,
     "bottom_margin": 28,
-    "max_box_width": 1320,
-    "min_box_width": 420,
-    "box_padding_x": 24,
-    "box_padding_y": 12,
-    "note_gap": 18,
-    "border_width": 6,
+    "max_box_width": 1100,
+    "min_box_width": 320,
+    "box_padding_x": 20,
+    "box_padding_y": 10,
+    "note_gap": 14,
+    "border_width": 4,
     "corner_radius": 0,
     "min_background_fraction": 0.04,
     "min_contrast": 4.5,
@@ -168,7 +168,9 @@
     "blink_frames": 2,
     "pose_hold_frames": 3,
     "firework_particles": 18,
-    "pixel_hearts": 6
+    "pixel_hearts": 6,
+    "weather_transition_frames": 15,
+    "weather_transition_steps": 5
   },
   "camera": {
     "enabled": true,
@@ -204,8 +206,8 @@
     "photo_reveal": {"duration_frames": 12, "max_per_video": 1}
   },
   "characters": {
-    "protagonist": {"hair": "ink", "coat": "cream", "trousers": "indigo", "accent": "red", "height_pixels": 48},
-    "companion": {"hair": "wood", "coat": "coral", "trousers": "blue", "accent": "cream", "height_pixels": 46},
+    "protagonist": {"hair": "ink", "coat": "blue", "trousers": "indigo", "accent": "red", "height_pixels": 48},
+    "companion": {"hair": "wood", "coat": "cream", "trousers": "red", "accent": "coral", "height_pixels": 46},
     "cat": {"body": "amber", "accent": "cream", "height_pixels": 16}
   },
   "scenes": {
@@ -234,10 +236,16 @@
       "filter": "dawn"
     },
     "station": {
-      "keywords": ["车站", "列车", "火车", "远方", "出发", "回来", "等待", "行李", "station", "train", "departure", "arrival", "waiting", "away"],
+      "keywords": ["车站", "站台", "列车", "火车", "远方", "出发", "回来", "等待", "行李", "station", "platform", "train", "departure", "arrival", "waiting", "away"],
       "palette": ["cream", "sea", "wood", "coral", "gray", "ink"],
       "props": ["ticket", "suitcase", "letter"],
       "filter": "memory"
+    },
+    "train_interior": {
+      "keywords": ["车厢", "车窗", "列车", "火车", "上车", "旅途", "carriage", "train interior"],
+      "palette": ["mint", "red", "cream", "sea", "wood", "ink"],
+      "props": ["ticket", "suitcase", "photo"],
+      "filter": "default"
     },
     "stage": {
       "keywords": ["唱", "歌", "舞台", "音乐", "掌声", "梦想", "星", "光", "song", "sing", "stage", "music", "dream", "star", "light"],

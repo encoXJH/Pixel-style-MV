@@ -13,9 +13,9 @@
 `error_ms = (actual_frame / fps - target_seconds) × 1000`
 
 - 默认 `fps=30`，一帧约 33.333ms。
-- 字幕目标来自 `alignment.json`，实际起止帧来自 `timeline.json`；字幕用向上取整避免提前出现。
-- 镜头保存目标时间、实际帧号与节拍吸附信息；最终 MP4 的第 i 帧 PTS 还应与 `i/fps` 一致。
-- 自动检查内部目标与量化/封装结果的偏差是否超过 50ms，同时检查单调性、缺帧和覆盖完整性。
+- 每句歌词只在 `timeline.json.lyric_cues` 中量化一次，字幕与句界镜头共享该 cue 的目标时间、实际帧号和稳定 ID；字幕用向上取整避免提前出现。
+- 句界镜头禁止独立节拍吸附，固定 `beat_snap_ms=0.0`、`beat_snap_applied=false`；最终 MP4 的第 i 帧 PTS 还应与 `i/fps` 一致。
+- 自动检查内部目标与量化/封装结果的偏差是否超过 50ms，同时检查单调性、缺帧、覆盖完整性及活动歌词帧的 `visual_line_id/lyric_cue_id/subtitle_id` 是否指向同一句。
 
 这只能证明成片遵守了所给的内部时间轴。若输入时间轴本身偏离真实人声，内部误差再小也不会修正这一事实。
 
@@ -68,11 +68,15 @@
 
 检查帧率、尺寸、总帧数、镜头连续覆盖、目标与实际帧误差、字幕区间与单调性，以及转场类型、时长、位置和使用次数。帧区间均为左闭右开。
 
-典型指标位于 `qc.json.metrics.timeline`：镜头/字幕数量、最大镜头误差、最大字幕误差、最大时间轴误差和转场计数。
+统一歌词绑定还逐活动歌词帧核对视觉镜头、cue 与字幕是否属于同一句；天气检查覆盖六种状态、过渡区间、阶段数、分屏限制和句界禁止独立吸附。`lyric_frame_match_ratio=1.0` 表示内部 cue—镜头—字幕映射覆盖率为 100%，不表示真实人声同步已验证。
+
+典型指标位于 `qc.json.metrics.timeline`：镜头/字幕数量、最大镜头误差、最大字幕误差、最大时间轴误差、转场计数、活动歌词帧数、歌词绑定匹配数/失配数、歌词帧匹配率和天气过渡统计。
 
 ### B. `frames_log`：逐帧渲染日志
 
 逐行读取 `frames.jsonl`，检查缺失、重复、越界帧，PTS 单调性，镜头/字幕/转场映射，字幕溢出与对比度，以及亮度、异常黑帧和冻结代理指标。
+
+逐帧绑定检查对比 `visual_line_id`、`lyric_cue_id`、`lyric_line_id`、`subtitle_id` 和 `local_frame`；天气检查对比目标态、前态、活动标记、阶段、总阶段数与 `weather_mix`。缺失帧也计入失配，重复帧不会重复增加匹配数。对应指标为 `lyric_frame_match_ratio`、`weather_frame_match_ratio` 和 `weather_transition_match_ratio`，三者通过只证明日志遵守内部时间轴。
 
 渲染日志与最终编码视频是两类证据。日志缺少精确帧差时可以使用亮度、色板等辅助识别冻结，但最终 MP4 仍会执行解码帧差检查。
 
@@ -97,6 +101,8 @@
 | `frame_integrity_pass` | 帧数、尺寸、覆盖、PTS、黑帧、冻结等完整性门禁。 |
 | `subtitle_pass` | 字幕区间、映射、溢出、存在性与对比度门禁。 |
 | `transition_pass` | 转场区间/标记及相关黑帧、帧差、冻结检查门禁。 |
+| `lyric_binding_pass` | 时间轴与实际逐帧日志中的歌词 cue、视觉镜头和字幕绑定门禁。 |
+| `weather_pass` | 天气词表、过渡参数及实际逐帧天气状态/阶段绑定门禁。 |
 | `human_vocal_sync` | 始终为 `unverified`。 |
 | `max_timeline_error_ms` | 三层报告中内部时间轴/PTS 误差的最大值。 |
 | `audio_offset_ms` | 成片音轨相对源音频的偏移；正值为滞后。 |
@@ -131,7 +137,8 @@
 2. 动作、特效和运镜是否属于当前已实现的词表，裁切/横移/保持帧是否为非负整数；
 3. 物件镜头是否最多两件道具，情绪叠加是否不超过配置上限；
 4. 所有转场是否存在于 `assets/style.json`，片头片尾是否回到同场景和主天气；
-5. 汇总实际出现的镜头类型、动作、特效、运镜、转场和声音 cue 覆盖清单。
+5. 三个及以上尾奏镜头是否具有场景、景别、动作、构图或天气差异，间奏/尾奏是否清空旧歌词 `line_id`；
+6. 汇总实际出现的镜头类型、动作、特效、运镜、转场和声音 cue 覆盖清单。
 
 结构校验失败会中止正式生成。通过时也只表示 `scope=structural_style_implementation_only`，并保留 `art_review_required=true`、`reference_audio_available=false`。它不验证主观相似度、原作者工程参数、参考混音或精确原始转场时序，也不保证每一种已实现元素都在某首特定歌曲中被歌词触发；应结合 `coverage` 判断当次覆盖范围。
 
@@ -139,10 +146,10 @@
 
 `scripts/preview.py` 用于场景、角色、镜头、动作、转场和字幕构图检查。它使用等分估计时间轴，不读取音频、不生成 MP4，也不执行本文所述的三层技术 QC。输出 `preview.json` 明确记录 `preview_only=true`、`timing_status=estimated_equal_duration`、`audio_sync=not_evaluated` 和 `human_vocal_sync=unverified`。
 
-美术修改后应实际查看三类证据：代表帧与 `contact-sheet.jpg`、动作序列与 `motion-contact-sheet.jpg`、转场过程帧与 `transition-contact-sheet.jpg`。检查角色造型和服装是否统一、动作是否可读、运镜是否保持硬边像素、转场是否连续、场景细节与信息密度是否平衡、环境天气是否随章节变化、片头片尾是否呼应，以及字幕是否完整留在安全区。自动测试、结构校验和最终 MP4 的技术 QC 均不能代替人工艺术验收。
+美术修改后应实际查看五类证据：代表帧与 `contact-sheet.jpg`、动作序列与 `motion-contact-sheet.jpg`、转场过程帧与 `transition-contact-sheet.jpg`、六类天气与 `weather-contact-sheet.jpg`、五组天气变化与 `weather-transition-contact-sheet.jpg`。检查角色造型和服装是否统一、动作是否可读、运镜是否保持硬边像素、转场与天气过渡是否连续、天气配色和粒子是否有区分度、场景细节与信息密度是否平衡、片头片尾是否呼应，以及字幕是否完整留在安全区。自动测试、结构校验和最终 MP4 的技术 QC 均不能代替人工艺术验收。
 
 ## 8. 声音设计与参考音频边界
 
 正式生成额外输出 `sound-design.json` 和 `sound-cues.wav`。后者为 48kHz、立体声、16-bit PCM 的原创程序化环境与动作 cue；封装时用户歌曲仍是主音乐，cue 以低电平混入并触发轻度侧链闪避。报告记录 cue 类型、时刻、时长、增益和混音配置，禁用声音或空镜头时也应生成合法静音 WAV。
 
-当前参考证据只有公开画面，没有参考音轨。因此 `original_reference_audio_available=false`、`music_source=user_song`、`design_status=original_programmatic_cues`，且 `generation.json.reference_mix_recreated=false`。不得把这些 cue 描述为原作者音效、原始分轨或参考混音的还原。自动音频偏移 QC 只比较最终音轨与用户源歌曲的封装关系，不证明声音设计的主观相似度；仍需人工试听歌曲主导性、cue 可辨识度、闪避是否自然和整体响度。
+生成器不接受参考音轨输入；本次参考分析只用于画面与叙事，不用于复刻混音。因此 `original_reference_audio_available=false`、`music_source=user_song`、`design_status=original_programmatic_cues`，且 `generation.json.reference_mix_recreated=false`。不得把这些 cue 描述为原作者音效、原始分轨或参考混音的还原。自动音频偏移 QC 只比较最终音轨与用户源歌曲的封装关系，不证明声音设计的主观相似度；仍需人工试听歌曲主导性、cue 可辨识度、闪避是否自然和整体响度。

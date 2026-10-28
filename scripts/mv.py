@@ -196,6 +196,7 @@ def generate(
 
     print("[1/5] 分析节拍、onset 与能量…", flush=True)
     features = media.analyze_audio(audio)
+    features["title"] = audio.stem
     _write_json(destination / "audio-features.json", features)
 
     print("[2/5] 对齐逐句歌词…", flush=True)

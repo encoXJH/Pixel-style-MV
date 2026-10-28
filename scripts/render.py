@@ -21,6 +21,7 @@ _SCENE_NAMES = (
     "rain_street",
     "seaside",
     "station",
+    "train_interior",
     "stage",
     "highway",
     "ancient",
@@ -168,6 +169,43 @@ def _alignment_lines(alignment: dict, duration: float) -> list[dict]:
     return lines
 
 
+def _build_lyric_cues(lines: list[dict], fps: int, frame_count: int) -> list[dict]:
+    """每句歌词只量化一次；字幕、镜头和逐帧日志都引用这里的帧区间。"""
+    cues: list[dict] = []
+    previous_start = -1
+    for index, line in enumerate(lines):
+        target_start = float(line["start"])
+        target_end = float(line["end"])
+        if target_end <= target_start:
+            raise ValueError(f"歌词 {line['id']} 缺少有效的起止时间")
+        start_frame = min(frame_count, max(0, int(math.ceil(target_start * fps))))
+        end_frame = min(frame_count, max(0, int(math.ceil(target_end * fps))))
+        if start_frame <= previous_start:
+            raise ValueError("相邻歌词起点落在同一视频帧，无法逐句绑定；请修正句级时间轴")
+        if end_frame <= start_frame:
+            raise ValueError(f"歌词 {line['id']} 短于一个视频帧，无法建立有效画面映射")
+        cue_id = f"lyric_{index:04d}"
+        cues.append(
+            {
+                "id": cue_id,
+                "line_id": line["id"],
+                "subtitle_id": f"subtitle_{index:04d}",
+                "text": line["text"],
+                "target_start": target_start,
+                "target_end": target_end,
+                "start": start_frame / fps,
+                "end": end_frame / fps,
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "error_start_ms": round((start_frame / fps - target_start) * 1000.0, 6),
+                "error_end_ms": round((end_frame / fps - target_end) * 1000.0, 6),
+                "shot_ids": [],
+            }
+        )
+        previous_start = start_frame
+    return cues
+
+
 def _feature_times(features: dict, names: tuple[str, ...]) -> np.ndarray:
     value: Any = None
     for name in names:
@@ -292,15 +330,15 @@ def _global_motif(lines: list[dict], style: dict) -> str:
 
 
 _STORY_ARCS = {
-    "station": ("station", "station", "seaside", "station", "bedroom", "rain_street", "seaside", "station"),
-    "seaside": ("seaside", "seaside", "station", "seaside", "bedroom", "rain_street", "seaside", "seaside"),
-    "campus": ("campus", "campus", "campus", "campus", "bedroom", "rain_street", "campus", "campus"),
-    "bedroom": ("bedroom", "bedroom", "station", "seaside", "bedroom", "rain_street", "bedroom", "station"),
-    "rain_street": ("rain_street", "rain_street", "station", "bedroom", "rain_street", "seaside", "station", "rain_street"),
-    "stage": ("stage", "bedroom", "stage", "stage", "bedroom", "rain_street", "stage", "stage"),
-    "highway": ("highway", "highway", "station", "seaside", "highway", "rain_street", "highway", "station"),
+    "station": ("station", "train_interior", "seaside", "station", "bedroom", "rain_street", "seaside", "station"),
+    "seaside": ("seaside", "train_interior", "station", "seaside", "bedroom", "rain_street", "seaside", "seaside"),
+    "campus": ("campus", "campus", "train_interior", "campus", "bedroom", "rain_street", "campus", "campus"),
+    "bedroom": ("bedroom", "train_interior", "station", "seaside", "bedroom", "rain_street", "bedroom", "station"),
+    "rain_street": ("rain_street", "train_interior", "station", "bedroom", "rain_street", "seaside", "station", "rain_street"),
+    "stage": ("stage", "bedroom", "stage", "train_interior", "bedroom", "rain_street", "stage", "stage"),
+    "highway": ("highway", "train_interior", "seaside", "highway", "bedroom", "rain_street", "highway", "seaside"),
     "ancient": ("ancient", "ancient", "ancient", "ancient", "bedroom", "ancient", "ancient", "ancient"),
-    "generic": ("generic", "station", "seaside", "generic", "bedroom", "rain_street", "seaside", "station"),
+    "generic": ("generic", "train_interior", "seaside", "generic", "bedroom", "rain_street", "seaside", "station"),
 }
 
 _PHASE_SHOTS = {
@@ -313,6 +351,19 @@ _PHASE_SHOTS = {
     "epilogue": ("landscape",),
 }
 
+# 只有明确的地点或行动意象才能覆盖章节场景；梦、你、夜等词不能单独跳场景。
+_SEMANTIC_SCENE_KEYWORDS = {
+    "train_interior": ("车厢", "车窗", "上车", "carriage", "train interior"),
+    "station": ("车站", "站台", "列车", "火车", "station", "platform", "train"),
+    "bedroom": ("房间", "卧室", "床", "窗下", "回家", "失眠", "room", "bedroom"),
+    "rain_street": ("雨里", "雨中", "下雨", "雨夜", "街道", "街头", "rain", "street"),
+    "highway": ("公路", "这条路", "路的两端", "路的中间", "拉斯维加斯", "沙漠", "无人烟", "往返", "highway", "road"),
+    "seaside": ("海", "沙滩", "海岸", "日落", "黄昏", "晚霞", "夕阳", "金黄", "sea", "beach", "sunset"),
+    "campus": ("学校", "校园", "教室", "同桌", "毕业", "课桌", "校服", "campus", "classroom"),
+    "stage": ("舞台", "掌声", "演唱会", "麦克风", "stage", "concert"),
+    "ancient": ("江湖", "剑客", "酒馆", "天涯", "故人", "sword", "jianghu"),
+}
+
 
 def _story_theme(lines: list[dict], style: dict) -> str:
     if len(lines) <= 3:
@@ -322,17 +373,26 @@ def _story_theme(lines: list[dict], style: dict) -> str:
                 return matched
     joined = "\n".join(line["text"] for line in lines)
     if _keyword_score(joined, style.get("scenes", {}).get("seaside", {}).get("keywords", [])) and _keyword_score(
-        joined, ["离开", "回来", "等待", "未来", "车站", "列车", "远方", "你"]
+        joined, ["离开", "回来", "等待", "未来", "车站", "站台", "列车", "远方"]
     ):
         return "station"
     ranked = []
     for index, name in enumerate(_SCENE_NAMES):
-        if name == "generic":
+        if name in ("generic", "train_interior"):
             continue
         score = _keyword_score(joined, style.get("scenes", {}).get(name, {}).get("keywords", []))
         ranked.append((score, -index, name))
     best = max(ranked, default=(0, 0, "generic"))
     return best[2] if best[0] > 0 else "generic"
+
+
+def _semantic_scene(text: str) -> str:
+    ranked = []
+    for priority, (scene, keywords) in enumerate(_SEMANTIC_SCENE_KEYWORDS.items()):
+        score = _keyword_score(text, list(keywords))
+        if score:
+            ranked.append((-score, priority, scene))
+    return min(ranked)[2] if ranked else "generic"
 
 
 def _story_scene(theme: str, progress: float) -> str:
@@ -362,6 +422,12 @@ def _shot_weather(theme: str, scene: str, phase: str, text: str, progress: float
         return "snow"
     if scene == "rain_street" or _keyword_score(text, ["雨", "下雨", "rain"]):
         return "rain"
+    if _keyword_score(text, ["多云", "阴天", "阴云", "云层", "cloudy", "overcast"]):
+        return "cloudy"
+    if _keyword_score(text, ["日落", "黄昏", "晚霞", "夕阳", "金黄", "sunset", "dusk"]):
+        return "sunset"
+    if _keyword_score(text, ["晴天", "放晴", "阳光", "sunny", "clear sky"]):
+        return "day"
     if _keyword_score(text, ["夜", "月亮", "星空", "失眠", "night", "moon"]):
         return "night"
     if theme == "station" and 0.72 <= progress < 0.82:
@@ -369,26 +435,12 @@ def _shot_weather(theme: str, scene: str, phase: str, text: str, progress: float
     if phase == "separation" and scene in ("station", "rain_street"):
         return "rain"
     if scene == "seaside" or phase in ("memory", "return") or _keyword_score(
-        text, ["夕阳", "日落", "黄昏", "sunset"]
+        text, ["夕阳", "日落", "黄昏", "晚霞", "sunset"]
     ):
         return "sunset"
     if scene == "bedroom" and phase not in ("return", "epilogue"):
         return "night"
     return "day"
-
-
-def _nearest_boundary_frame(target: float, fps: int, candidates: np.ndarray, window: float) -> tuple[int, bool]:
-    plain = int(round(target * fps))
-    if not len(candidates):
-        return plain, False
-    distances = np.abs(candidates - target)
-    nearest_index = int(np.argmin(distances))
-    if float(distances[nearest_index]) > window + 1e-12:
-        return plain, False
-    snapped = int(round(float(candidates[nearest_index]) * fps))
-    if abs(snapped / fps - target) > window + 1e-12:
-        return plain, False
-    return snapped, True
 
 
 def _camera_plan(shot_type: str, phase: str, index: int, style: dict) -> dict:
@@ -412,9 +464,9 @@ def _camera_plan(shot_type: str, phase: str, index: int, style: dict) -> dict:
 def _shot_effects(base: dict, progress: float) -> list[str]:
     text = base["text"]
     effects: list[str] = []
-    if base["story_phase"] in ("prologue", "epilogue"):
+    if base["story_phase"] == "prologue":
         effects.append("title_card")
-    if base["story_phase"] == "memory":
+    if base["story_phase"] == "memory" or _keyword_score(text, ["照片", "相片", "回忆", "记忆", "记得", "photo", "memory", "remember"]):
         effects.append("photo_frame" if base["shot_type"] in ("object", "close") else "film_frame")
     if _keyword_score(text, ["梦", "想象", "如果", "幻想", "dream", "imagine"]):
         effects.append("thought_bubble")
@@ -449,6 +501,123 @@ def _shot_sfx(base: dict) -> list[str]:
     return list(dict.fromkeys(cues))
 
 
+def _montage_variant(
+    shot: dict,
+    base: dict,
+    chunk_index: int,
+    theme: str,
+    motif: str,
+    pair_story: bool,
+    style: dict,
+) -> dict:
+    """把长镜头拆成有叙事变化的蒙太奇，而不是复制同一构图。"""
+    kind = base["kind"]
+    shot["kind"] = kind
+    shot["variant"] = int(chunk_index)
+    if kind == "lyric":
+        return shot
+    if kind == "prologue":
+        if chunk_index == 0:
+            shot.update(
+                action="title_board",
+                shot_type="landscape",
+                characters=[],
+                props=[],
+                compare_weather=None,
+                effects=[],
+                sfx=[],
+            )
+            shot["camera"] = {"kind": "static", "max_crop_pixels": 0, "pan_pixels": 0, "hold_frames": 2, "direction": 1}
+            shot["blocking"] = {"layout": "environment_only", "primary_action": "title_board", "screen_direction": "left_to_right"}
+            shot["density"] = {"background_layers": 5, "primary_actions": 1, "object_props": 0, "emotional_overlays": 0}
+        else:
+            shot["effects"] = []
+            shot["shot_type"] = "landscape" if chunk_index % 2 else "wide"
+        return shot
+
+    arc = _STORY_ARCS.get(theme, _STORY_ARCS["generic"])
+    scene = base["scene"] if chunk_index == 0 else arc[(chunk_index * 3 + 1) % len(arc)]
+    shot_types = ("wide", "medium", "close", "object", "landscape", "wide", "medium", "close")
+    shot_type = shot_types[(chunk_index - 1) % len(shot_types)] if chunk_index else base["shot_type"]
+    weather = _shot_weather(theme, scene, base["story_phase"], base["text"], 0.8)
+    characters: list[str] = []
+    if shot_type not in ("landscape", "object"):
+        characters = ["protagonist"]
+        if pair_story and (shot_type == "close" or chunk_index % 3 != 1):
+            characters.append("companion")
+    props = _select_props(base["text"], scene, motif, style)
+    if shot_type == "landscape":
+        props = ["cat"] if scene == "station" else []
+    action = "waiting"
+    if shot_type == "object" and chunk_index % 2:
+        action = "heart_glass"
+        props = []
+    elif scene == "station" and chunk_index % 3 == 0:
+        action = "train"
+    elif characters and scene in ("seaside", "highway") and shot_type != "close" and chunk_index % 2:
+        action = "walking"
+    if shot_type == "object" and action != "heart_glass":
+        props = (props or [motif])[:2]
+
+    shot.update(
+        scene=scene,
+        shot_type=shot_type,
+        weather=weather,
+        compare_weather=None,
+        characters=characters,
+        props=props,
+        action=action,
+        expression=base.get("expression", "neutral"),
+        line_id=None,
+        lyric_cue_id=None,
+        boundary_source=kind,
+        effects=[],
+    )
+    scene_config = style.get("scenes", {}).get(scene, {})
+    shot["palette"] = list(scene_config.get("palette", style.get("scenes", {}).get("generic", {}).get("palette", [])))
+    shot["filter"] = scene_config.get("filter", "default")
+    if weather in ("rain", "night"):
+        shot["filter"] = "rain_night"
+    elif weather in ("sunset", "snow"):
+        shot["filter"] = "dawn"
+    if scene == "station" and shot_type in ("wide", "medium") and chunk_index % 4 == 2:
+        shot["weather"] = "day"
+        shot["compare_weather"] = "snow"
+        shot["filter"] = "default"
+    shot["camera"] = _camera_plan(shot_type, base["story_phase"], chunk_index, style)
+    if shot["compare_weather"]:
+        shot["camera"]["kind"] = "static"
+    if shot_type == "object":
+        layout = "object_table"
+    elif not characters:
+        layout = "environment_only"
+    elif shot_type == "close" and len(characters) > 1:
+        layout = "dual_portrait"
+    elif len(characters) > 1 and scene in ("station", "train_interior"):
+        layout = "bench_pair"
+    elif len(characters) > 1 and base["story_phase"] == "separation":
+        layout = "separate_sides"
+    else:
+        layout = "two_shot" if len(characters) > 1 else "center_single"
+    shot["blocking"] = {
+        "layout": layout,
+        "primary_action": action,
+        "screen_direction": "left_to_right" if chunk_index % 2 == 0 else "right_to_left",
+    }
+    if base["story_phase"] == "memory" and shot_type in ("object", "close"):
+        shot["effects"] = ["photo_frame"]
+    if base.get("energy_peak") and scene in ("seaside", "station", "stage"):
+        shot["effects"] = list(dict.fromkeys(shot["effects"] + ["fireworks"]))
+    shot["sfx"] = _shot_sfx(shot)
+    shot["density"] = {
+        "background_layers": int(style.get("density", {}).get("background_layers", 5)),
+        "primary_actions": 1,
+        "object_props": len(props) if shot_type == "object" else 0,
+        "emotional_overlays": min(2, len(shot["effects"])),
+    }
+    return shot
+
+
 def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
     if not isinstance(alignment, dict) or not isinstance(features, dict):
         raise ValueError("alignment 和 features 必须是 JSON 对象")
@@ -469,6 +638,8 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
     frame_count = int(math.ceil(duration * fps))
     if frame_count <= 0:
         raise ValueError("时长不足以生成视频帧")
+    lyric_cues = _build_lyric_cues(lines, fps, frame_count)
+    cue_by_line = {cue["line_id"]: cue for cue in lyric_cues}
 
     min_shot = max(0.0, float(timing.get("min_shot_seconds", 0.6)))
     max_shot = max(1.0 / fps, float(timing.get("max_shot_seconds", 8.0)))
@@ -479,48 +650,44 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
     bases: list[dict] = []
     first = lines[0]
     if first["start"] > 0:
-        scene = _match_scene(first["text"], style)
         bases.append(
             {
+                "kind": "prologue",
                 "line_id": None,
                 "text": first["text"],
                 "target_start": 0.0,
                 "target_end": first["start"],
-                "scene": scene,
                 "opening": True,
                 "closing": False,
             }
         )
+    # 歌词、句间空白和尾奏分开规划，避免把上一句的视觉 line_id 延续到间奏。
     for index, line in enumerate(lines):
-        if index + 1 < len(lines):
-            end = lines[index + 1]["start"]
-        else:
-            tail = duration - line["end"]
-            end = line["end"] if tail >= min_shot and tail > 0 else duration
-        scene = _match_scene(line["text"], style)
         bases.append(
             {
+                "kind": "lyric",
                 "line_id": line["id"],
                 "text": line["text"],
                 "target_start": line["start"],
-                "target_end": end,
-                "scene": scene,
+                "target_end": line["end"],
                 "opening": False,
                 "closing": False,
             }
         )
-    last = lines[-1]
-    if duration - last["end"] >= min_shot and duration > last["end"]:
-        opening = bases[0]
+        next_start = lines[index + 1]["start"] if index + 1 < len(lines) else duration
+        if next_start <= line["end"]:
+            continue
+        closing = index + 1 == len(lines)
+        gap_text = first["text"] if closing else f"{line['text']}\n{lines[index + 1]['text']}"
         bases.append(
             {
+                "kind": "epilogue" if closing else "instrumental",
                 "line_id": None,
-                "text": opening["text"],
-                "target_start": last["end"],
-                "target_end": duration,
-                "scene": opening["scene"],
+                "text": gap_text,
+                "target_start": line["end"],
+                "target_end": next_start,
                 "opening": False,
-                "closing": True,
+                "closing": closing,
             }
         )
     if len(bases) > frame_count:
@@ -530,32 +697,41 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
     joined_lyrics = "\n".join(line["text"] for line in lines)
     pair_story = bool(_keyword_score(joined_lyrics, ["你", "你们", "我们", "同桌", "故人", "friend", "together", "you", "us"]))
     phase_counts: dict[str, int] = {}
+    song_title = str(features.get("title") or alignment.get("title") or "像素 · 纪行")
+    artist = str(features.get("artist") or alignment.get("artist") or "")
     for base_index, base in enumerate(bases):
-        progress = base_index / max(1, len(bases) - 1)
+        kind = base["kind"]
         opening = bool(base["opening"])
         closing = bool(base["closing"])
-        base["scene"] = theme if opening or closing else _story_scene(theme, progress)
+        progress = max(0.0, min(1.0, float(base["target_start"]) / duration))
+        semantic = _semantic_scene(base["text"]) if kind == "lyric" else "generic"
+        base["scene"] = theme if opening or closing else (semantic if semantic != "generic" else _story_scene(theme, progress))
         base["story_phase"] = _story_phase(progress, opening, closing)
         base["chapter"] = min(8, int(progress * 8) + 1)
+        base["variant"] = 0
         phase_pattern = _PHASE_SHOTS[base["story_phase"]]
         pattern_index = phase_counts.get(base["story_phase"], 0)
         phase_counts[base["story_phase"]] = pattern_index + 1
         base["shot_type"] = phase_pattern[pattern_index % len(phase_pattern)]
+        if kind == "instrumental":
+            montage_shots = ("wide", "medium", "close", "object", "landscape", "wide")
+            base["shot_type"] = montage_shots[pattern_index % len(montage_shots)]
         if _keyword_score(base["text"], ["相拥", "拥抱", "抱紧", "靠近"]):
             base["shot_type"] = "medium"
-        elif _keyword_score(base["text"], ["画心", "一颗心", "表白", "雾气", "玻璃"]):
+        elif kind == "lyric" and _keyword_score(base["text"], ["画心", "一颗心", "表白", "雾气", "玻璃"]):
             base["shot_type"] = "object"
         elif _keyword_score(base["text"], ["单车", "自行车", "骑行", "阅读", "看书", "课本", "拍照", "相机", "快门", "bicycle", "reading", "photograph", "camera"]):
             base["shot_type"] = "medium"
         base["weather"] = _shot_weather(theme, base["scene"], base["story_phase"], base["text"], progress)
         if closing:
-            base["weather"] = bases[0]["weather"]
+            base["weather"] = bases[0].get("weather", "day")
         base["compare_weather"] = None
         if theme == "station" and (opening or closing):
-            base["weather"] = "day" if opening else bases[0]["weather"]
+            base["weather"] = "day" if opening else bases[0].get("weather", "day")
             base["compare_weather"] = "rain" if opening else "snow"
         elif (
             pair_story
+            and kind == "lyric"
             and base["scene"] == "station"
             and base["story_phase"] == "return"
             and base["shot_type"] in ("wide", "medium")
@@ -575,13 +751,14 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         elif base["weather"] in ("sunset", "snow"):
             base["filter"] = "dawn"
         base["energy"] = _energy_at(curve, (base["target_start"] + base["target_end"]) / 2)
-        embrace = pair_story and bool(_keyword_score(base["text"], ["相拥", "拥抱", "抱紧", "靠近"]))
-        heart_glass = base["shot_type"] == "object" and bool(
+        embrace = kind == "lyric" and pair_story and bool(_keyword_score(base["text"], ["相拥", "拥抱", "抱紧", "靠近"]))
+        heart_glass = base["shot_type"] == "object" and kind == "lyric" and bool(
             _keyword_score(base["text"], ["画心", "一颗心", "表白", "雾气", "玻璃"])
         )
+        dual_portrait = kind == "lyric" and pair_story and base["shot_type"] == "close" and not embrace
         characters: list[str] = []
         if base["shot_type"] not in ("landscape", "object"):
-            if embrace:
+            if embrace or dual_portrait:
                 characters = ["protagonist", "companion"]
             elif base["shot_type"] == "close":
                 characters = ["companion" if pair_story and base_index % 2 else "protagonist"]
@@ -595,12 +772,15 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         elif base["shot_type"] == "object":
             object_props = [name for name in base["props"] if name != "cat"][:2]
             base["props"] = [] if heart_glass else (object_props or [motif])
+        base["expression"] = "sad" if _keyword_score(base["text"], ["哭", "泪", "离开", "告别", "黑暗", "孤独", "迷失", "sad", "tears", "goodbye"]) else (
+            "happy" if _keyword_score(base["text"], ["相拥", "拥抱", "爱", "喜欢", "耀眼", "烟花", "happy", "love"]) else "neutral"
+        )
         base["action"] = "waiting"
         if heart_glass:
             base["action"] = "heart_glass"
         elif embrace:
             base["action"] = "embrace"
-        elif base["scene"] == "station" and (opening or base_index % 6 == 2 or _keyword_score(base["text"], ["列车", "火车", "train"])):
+        elif base["scene"] == "station" and (opening or _keyword_score(base["text"], ["列车", "火车", "train"])):
             base["action"] = "train"
         elif characters and _keyword_score(base["text"], ["单车", "自行车", "骑行", "bicycle", "bike", "cycling"]):
             base["action"] = "cycling"
@@ -610,21 +790,38 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
             base["action"] = "photographing"
         elif "guitar" in base["props"] and base["scene"] in ("stage", "bedroom"):
             base["action"] = "playing"
-        elif len(characters) > 1:
+        elif characters and _keyword_score(base["text"], ["寻找", "迷失", "奔跑", "走过", "行走", "离开", "告别", "赶来", "往返", "walking", "running"]):
+            base["action"] = "walking"
+        elif len(characters) > 1 and _keyword_score(base["text"], ["交谈", "说话", "聊", "唱着", "talk", "sing"]):
             base["action"] = "talking"
-        elif base["story_phase"] == "return":
+        elif kind == "instrumental" and characters and base["scene"] in ("seaside", "highway"):
             base["action"] = "walking"
         base["camera"] = _camera_plan(base["shot_type"], base["story_phase"], base_index, style)
         if base["compare_weather"]:
             base["camera"]["kind"] = "static"
+        if base["shot_type"] == "object":
+            layout = "object_table"
+        elif not characters:
+            layout = "environment_only"
+        elif dual_portrait:
+            layout = "dual_portrait"
+        elif embrace:
+            layout = "close_pair"
+        elif len(characters) > 1 and base["scene"] in ("station", "train_interior") and base["action"] in ("waiting", "talking"):
+            layout = "bench_pair"
+        elif len(characters) > 1 and base["story_phase"] == "separation":
+            layout = "separate_sides"
+        else:
+            layout = "two_shot" if len(characters) > 1 else "center_single"
         base["blocking"] = {
-            "layout": "object_table" if base["shot_type"] == "object" else ("environment_only" if not characters else ("close_pair" if embrace else ("two_shot" if len(characters) > 1 else "center_single"))),
+            "layout": layout,
             "primary_action": base["action"],
             "screen_direction": "left_to_right" if base_index % 2 == 0 else "right_to_left",
         }
         base["effects"] = _shot_effects(base, progress)
         base["sfx"] = _shot_sfx(base)
-        base["title"] = {"station": "车站 · 远方", "seaside": "海边 · 夏天", "campus": "校园 · 纪念", "bedroom": "房间 · 来信", "rain_street": "雨街 · 等待", "stage": "舞台 · 星光", "highway": "公路 · 旅行", "ancient": "江湖 · 故人", "generic": "像素 · 纪行"}[theme]
+        base["title"] = song_title
+        base["artist"] = artist
         base["density"] = {
             "background_layers": int(style.get("density", {}).get("background_layers", 5)),
             "primary_actions": 1,
@@ -642,18 +839,14 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
             climax["effects"].append("fireworks")
             climax["sfx"].append("fireworks")
 
-    beats = _feature_times(features, ("beats", "beat_times", "beat_seconds"))
-    onsets = _feature_times(features, ("onsets", "onset_times", "onset_seconds"))
-    snap_candidates = np.concatenate((beats, onsets)) if len(beats) or len(onsets) else np.empty(0)
-    snap_window = float(timing.get("beat_snap_window_ms", timing.get("max_sync_ms", 50))) / 1000.0
-    desired_frames = [0]
-    snapped_flags = [False]
-    for base in bases[1:]:
-        frame, snapped = _nearest_boundary_frame(base["target_start"], fps, snap_candidates, snap_window)
-        desired_frames.append(frame)
-        snapped_flags.append(snapped)
+    # 句界镜头与字幕必须使用同一个 cue 帧，不允许再独立取整或吸附节拍。
+    desired_frames = []
+    for base in bases:
+        if base["line_id"] is not None:
+            desired_frames.append(int(cue_by_line[base["line_id"]]["start_frame"]))
+        else:
+            desired_frames.append(min(frame_count, int(math.ceil(float(base["target_start"]) * fps))))
     desired_frames.append(frame_count)
-    snapped_flags.append(False)
 
     for index in range(1, len(desired_frames) - 1):
         desired_frames[index] = max(desired_frames[index], desired_frames[index - 1] + 1)
@@ -671,50 +864,91 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
             chunk_end = min(last_frame, chunk_start + max_shot_frames)
             shot_index = len(shots)
             target_start = base["target_start"] if chunk_start == first_frame else chunk_start / fps
-            beat_snap = 0.0
-            if chunk_start == first_frame and snapped_flags[base_index]:
-                candidate_snap = (chunk_start / fps - base["target_start"]) * 1000.0
-                if abs(candidate_snap) <= snap_window * 1000.0 + 1e-6:
-                    beat_snap = round(candidate_snap, 6)
-            shots.append(
-                {
-                    "id": f"shot_{shot_index:04d}",
-                    "line_id": base["line_id"],
-                    "target_start": float(target_start),
-                    "start": chunk_start / fps,
-                    "end": chunk_end / fps,
-                    "start_frame": int(chunk_start),
-                    "end_frame": int(chunk_end),
-                    "scene": base["scene"],
-                    "palette": list(base["palette"]),
-                    "props": list(base["props"]),
-                    "characters": list(base["characters"]),
-                    "filter": base["filter"],
-                    "art_version": 2,
-                    "shot_type": base["shot_type"] if chunk_start == first_frame else ("medium" if base["shot_type"] == "wide" else base["shot_type"]),
-                    "weather": base["weather"],
-                    "compare_weather": base["compare_weather"],
-                    "story_phase": base["story_phase"],
-                    "chapter": base["chapter"],
-                    "narrative_beat": base["story_phase"],
-                    "action": base["action"],
-                    "camera": dict(base["camera"]),
-                    "blocking": dict(base["blocking"]),
-                    "effects": list(base["effects"]),
-                    "sfx": list(dict.fromkeys(base["sfx"])),
-                    "density": dict(base["density"]),
-                    "title": base["title"],
-                    "energy": float(base["energy"]),
-                    "energy_peak": bool(base.get("energy_peak", False)),
-                    "pose_hold_frames": int(style.get("dynamics", {}).get("pose_hold_frames", 6)),
-                    "transition_in": "hard_cut",
-                    "transition_frames": 0,
-                    "seed": top_seed + shot_index * 7919,
-                    "beat_snap_ms": beat_snap,
-                }
-            )
+            lyric_cue_id = cue_by_line[base["line_id"]]["id"] if base["line_id"] is not None else None
+            shot = {
+                "id": f"shot_{shot_index:04d}",
+                "line_id": base["line_id"],
+                "lyric_cue_id": lyric_cue_id,
+                "boundary_source": lyric_cue_id or base["kind"],
+                "target_start": float(target_start),
+                "start": chunk_start / fps,
+                "end": chunk_end / fps,
+                "start_frame": int(chunk_start),
+                "end_frame": int(chunk_end),
+                "scene": base["scene"],
+                "palette": list(base["palette"]),
+                "props": list(base["props"]),
+                "characters": list(base["characters"]),
+                "filter": base["filter"],
+                "art_version": 3,
+                "shot_type": base["shot_type"] if chunk_start == first_frame else ("medium" if base["shot_type"] == "wide" else base["shot_type"]),
+                "weather": base["weather"],
+                "compare_weather": base["compare_weather"],
+                "story_phase": base["story_phase"],
+                "chapter": base["chapter"],
+                "narrative_beat": base["kind"],
+                "action": base["action"],
+                "camera": dict(base["camera"]),
+                "blocking": dict(base["blocking"]),
+                "effects": list(base["effects"]),
+                "sfx": list(dict.fromkeys(base["sfx"])),
+                "density": dict(base["density"]),
+                "title": base["title"],
+                "artist": base["artist"],
+                "expression": base["expression"],
+                "energy": _energy_at(curve, (chunk_start + chunk_end) / (2 * fps)),
+                "energy_peak": bool(base.get("energy_peak", False)) and chunk_start == first_frame,
+                "pose_hold_frames": int(style.get("dynamics", {}).get("pose_hold_frames", 6)),
+                "transition_in": "hard_cut",
+                "transition_frames": 0,
+                "seed": top_seed + shot_index * 7919,
+                "beat_snap_ms": 0.0,
+                "beat_snap_applied": False,
+                "weather_from": None,
+                "weather_transition_frames": 0,
+                "weather_transition_steps": max(2, int(style.get("dynamics", {}).get("weather_transition_steps", 5))),
+            }
+            chunk_index = (chunk_start - first_frame) // max_shot_frames
+            shots.append(_montage_variant(shot, base, chunk_index, theme, motif, pair_story, style))
+            if lyric_cue_id is not None:
+                cue_by_line[base["line_id"]]["shot_ids"].append(f"shot_{shot_index:04d}")
             base_indices.append(base_index)
-            energies.append(float(base["energy"]))
+            energies.append(float(shots[-1]["energy"]))
+
+    if len(shots) > 1 and bases[0]["kind"] == "prologue":
+        first_shot = shots[0]
+        last_shot = shots[-1]
+        last_shot.update(
+            scene=first_shot["scene"],
+            palette=list(first_shot["palette"]),
+            weather=first_shot["weather"],
+            compare_weather=None,
+            shot_type="landscape",
+            action="title_board",
+            characters=[],
+            props=[],
+            effects=[],
+            sfx=[],
+            expression="neutral",
+            title=first_shot["title"],
+            artist=first_shot.get("artist", ""),
+            filter="default",
+        )
+        last_shot["camera"] = {"kind": "static", "max_crop_pixels": 0, "pan_pixels": 0, "hold_frames": 2, "direction": 1}
+        last_shot["blocking"] = {"layout": "environment_only", "primary_action": "title_board", "screen_direction": "left_to_right"}
+        last_shot["density"] = {"background_layers": 5, "primary_actions": 1, "object_props": 0, "emotional_overlays": 0}
+
+    weather_frames = max(0, int(style.get("dynamics", {}).get("weather_transition_frames", 15)))
+    for index in range(1, len(shots)):
+        shot = shots[index]
+        previous_weather = str(shots[index - 1].get("weather", "day"))
+        if previous_weather == shot["weather"] or shot.get("compare_weather"):
+            continue
+        shot["weather_from"] = previous_weather
+        shot["weather_transition_frames"] = min(
+            weather_frames,
+            max(0, int(shot["end_frame"]) - int(shot["start_frame"]) - 1),
+        )
 
     transition_style = style.get("transitions", {})
 
@@ -731,7 +965,7 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         last_shot["transition_out"] = "iris_out"
         last_shot["transition_out_frames"] = min(
             transition_duration("iris_out"),
-            max(0, last_shot["end_frame"] - last_shot["start_frame"] - 1),
+            max(0, frame_count - 1),
         )
 
     white_limit = max(0, int(transition_style.get("white_flash", {}).get("max_per_video", 2)))
@@ -798,33 +1032,23 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         ],
     )
 
-    subtitles: list[dict] = []
-    for index, line in enumerate(lines):
-        target_start = float(line["start"])
-        target_end = float(line["end"])
-        start_frame = min(frame_count, max(0, int(math.ceil(target_start * fps))))
-        end_frame = min(frame_count, max(0, int(math.ceil(target_end * fps))))
-        if end_frame <= start_frame and start_frame < frame_count:
-            end_frame = start_frame + 1
-        if end_frame <= start_frame:
-            continue
-        start = start_frame / fps
-        end = end_frame / fps
-        subtitles.append(
-            {
-                "id": f"subtitle_{index:04d}",
-                "line_id": line["id"],
-                "text": line["text"],
-                "target_start": target_start,
-                "target_end": target_end,
-                "start": start,
-                "end": end,
-                "start_frame": start_frame,
-                "end_frame": end_frame,
-                "error_start_ms": round((start - target_start) * 1000.0, 6),
-                "error_end_ms": round((end - target_end) * 1000.0, 6),
-            }
-        )
+    subtitles = [
+        {
+            "id": cue["subtitle_id"],
+            "cue_id": cue["id"],
+            "line_id": cue["line_id"],
+            "text": cue["text"],
+            "target_start": cue["target_start"],
+            "target_end": cue["target_end"],
+            "start": cue["start"],
+            "end": cue["end"],
+            "start_frame": cue["start_frame"],
+            "end_frame": cue["end_frame"],
+            "error_start_ms": cue["error_start_ms"],
+            "error_end_ms": cue["error_end_ms"],
+        }
+        for cue in lyric_cues
+    ]
 
     statuses = {line["status"] for line in lines}
     if "failed" in statuses:
@@ -835,7 +1059,7 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         alignment_status = str(alignment.get("alignment_status", alignment.get("status", "aligned")))
 
     timeline = {
-        "schema_version": 2,
+        "schema_version": 3,
         "style_profile": style.get("reference_profile", {}).get("id", "pixel-narrative-mv"),
         "fps": fps,
         "duration": duration,
@@ -846,10 +1070,18 @@ def plan_timeline(alignment: dict, features: dict, style: dict) -> dict:
         "low_height": int(render["low_height"]),
         "scale": int(render["scale"]),
         "seed": top_seed,
-        "art_version": 2,
+        "art_version": 3,
         "story_theme": theme,
         "subtitle_band_height": int(style.get("subtitle", {}).get("band_height", 160)),
         "alignment_status": alignment_status,
+        "sync": {
+            "frame_clock": "shared_lyric_cue_v1",
+            "interval": "left_closed_right_open",
+            "quantization": "ceil_target_seconds_times_fps",
+            "independent_shot_snap": False,
+            "human_vocal_sync": "unverified",
+        },
+        "lyric_cues": lyric_cues,
         "shots": shots,
         "subtitles": subtitles,
     }
@@ -871,6 +1103,8 @@ def _validate_timeline(timeline: dict) -> None:
         "seed",
         "subtitle_band_height",
         "alignment_status",
+        "sync",
+        "lyric_cues",
         "shots",
         "subtitles",
     }
@@ -903,16 +1137,52 @@ def _validate_timeline(timeline: dict) -> None:
             shot["scene"] = "generic"
         if abs(float(shot["start"]) - start / fps) > 1e-6 or abs(float(shot["end"]) - end / fps) > 1e-6:
             raise ValueError(f"镜头 {shot.get('id', index)} 的秒时间必须与帧边界一致")
+        if shot.get("weather") not in {"day", "cloudy", "rain", "snow", "night", "sunset"}:
+            raise ValueError(f"镜头 {shot.get('id', index)} 使用未知天气")
+        weather_frames = int(shot.get("weather_transition_frames", 0))
+        if weather_frames < 0 or weather_frames > end - start:
+            raise ValueError(f"镜头 {shot.get('id', index)} 的天气过渡帧数无效")
+        if weather_frames and shot.get("weather_from") == shot.get("weather"):
+            raise ValueError(f"镜头 {shot.get('id', index)} 的天气过渡起止状态不能相同")
     if cursor != frame_count:
         raise ValueError("镜头未连续覆盖全部视频帧")
-    for index, subtitle in enumerate(timeline["subtitles"]):
-        start = int(subtitle["start_frame"])
-        end = int(subtitle["end_frame"])
-        if start < 0 or end > frame_count or end <= start:
-            raise ValueError(f"字幕 {index} 的帧范围无效")
-        expected = min(frame_count, max(0, int(math.ceil(float(subtitle["target_start"]) * fps))))
-        if start != expected:
-            raise ValueError(f"字幕 {subtitle.get('id', index)} 必须使用 ceil(target_start × fps)，避免提前出现")
+    cues = timeline["lyric_cues"]
+    subtitles = timeline["subtitles"]
+    if not isinstance(cues, list) or not cues or len(cues) != len(subtitles):
+        raise ValueError("lyric_cues 必须与字幕逐句一一对应")
+    shot_at: list[int] = [-1] * frame_count
+    for shot_index, shot in enumerate(shots):
+        start_frame = int(shot["start_frame"])
+        end_frame = int(shot["end_frame"])
+        shot_at[start_frame:end_frame] = [shot_index] * (end_frame - start_frame)
+    previous_start = -1
+    for index, (cue, subtitle) in enumerate(zip(cues, subtitles)):
+        start = int(cue["start_frame"])
+        end = int(cue["end_frame"])
+        if start < 0 or end > frame_count or end <= start or start <= previous_start:
+            raise ValueError(f"歌词 cue {index} 的帧范围无效或不可区分")
+        previous_start = start
+        expected_start = min(frame_count, max(0, int(math.ceil(float(cue["target_start"]) * fps))))
+        expected_end = min(frame_count, max(0, int(math.ceil(float(cue["target_end"]) * fps))))
+        if (start, end) != (expected_start, expected_end):
+            raise ValueError(f"歌词 cue {cue.get('id', index)} 必须统一使用 ceil(target × fps)")
+        expected_ids = (f"lyric_{index:04d}", f"subtitle_{index:04d}")
+        if (cue.get("id"), cue.get("subtitle_id")) != expected_ids:
+            raise ValueError(f"歌词 cue {index} 的 ID 与字幕引用不一致")
+        shared_fields = ("line_id", "text", "target_start", "target_end", "start", "end", "start_frame", "end_frame")
+        if subtitle.get("id") != cue["subtitle_id"] or subtitle.get("cue_id") != cue["id"]:
+            raise ValueError(f"字幕 {index} 未引用唯一歌词 cue")
+        if any(subtitle.get(field) != cue.get(field) for field in shared_fields):
+            raise ValueError(f"字幕 {subtitle.get('id', index)} 与歌词 cue 的时间或内容不一致")
+        if not cue.get("shot_ids"):
+            raise ValueError(f"歌词 cue {cue['id']} 没有对应叙事镜头")
+        for frame in range(start, end):
+            shot = shots[shot_at[frame]]
+            if shot.get("line_id") != cue["line_id"] or shot.get("lyric_cue_id") != cue["id"]:
+                raise ValueError(f"帧 {frame} 的歌词字幕与叙事镜头未绑定到同一句")
+        first_shot = next(shot for shot in shots if shot["id"] == cue["shot_ids"][0])
+        if int(first_shot["start_frame"]) != start:
+            raise ValueError(f"歌词 cue {cue['id']} 的首镜头未从同一帧开始")
 
 
 def _rgb(value: Any, palette: dict[str, str]) -> tuple[int, int, int]:
@@ -1700,6 +1970,47 @@ def _keyframe_requests(shots: list[dict], directory: Path | None) -> dict[int, l
     return requests
 
 
+def build_frame_bindings(timeline: dict) -> list[dict]:
+    """从唯一 cue/镜头时间轴派生逐帧绑定，渲染与测试共用此映射。"""
+    frame_count = int(timeline["frame_count"])
+    shot_at: list[int] = [-1] * frame_count
+    for index, shot in enumerate(timeline["shots"]):
+        start_frame = int(shot["start_frame"])
+        end_frame = int(shot["end_frame"])
+        shot_at[start_frame:end_frame] = [index] * (end_frame - start_frame)
+    cue_at: list[dict | None] = [None] * frame_count
+    for cue in timeline["lyric_cues"]:
+        for frame in range(int(cue["start_frame"]), int(cue["end_frame"])):
+            cue_at[frame] = cue
+    bindings = []
+    for frame in range(frame_count):
+        shot_index = shot_at[frame]
+        shot = timeline["shots"][shot_index]
+        cue = cue_at[frame]
+        local_frame = frame - int(shot["start_frame"])
+        weather = art.weather_state(shot, local_frame)
+        bindings.append(
+            {
+                "frame": frame,
+                "pts": frame / int(timeline["fps"]),
+                "shot_index": shot_index,
+                "shot_id": shot["id"],
+                "local_frame": local_frame,
+                "visual_line_id": cue["line_id"] if cue else None,
+                "lyric_cue_id": cue["id"] if cue else None,
+                "lyric_line_id": cue["line_id"] if cue else None,
+                "subtitle_id": cue["subtitle_id"] if cue else None,
+                "weather": shot["weather"],
+                "weather_from": shot.get("weather_from"),
+                "weather_transition": weather["active"],
+                "weather_transition_stage": weather["stage"],
+                "weather_transition_steps": weather["steps"],
+                "weather_mix": weather["amount"],
+            }
+        )
+    return bindings
+
+
 def render_video(
     timeline: dict,
     style: dict,
@@ -1725,20 +2036,16 @@ def render_video(
     render_config = style.get("render", {})
     palette_image = _palette_image(style)
     contexts = [_shot_context(shot, style) for shot in shots]
-    shot_for_frame = np.empty(frame_count, dtype=np.int32)
-    for index, shot in enumerate(shots):
-        shot_for_frame[int(shot["start_frame"]) : int(shot["end_frame"])] = index
-    subtitle_for_frame = np.full(frame_count, -1, dtype=np.int32)
-    for index, subtitle in enumerate(subtitles):
-        subtitle_for_frame[int(subtitle["start_frame"]) : int(subtitle["end_frame"])] = index
+    bindings = build_frame_bindings(timeline)
 
     font_path = find_font(style) if subtitles else None
     if font_path is not None:
         for context in contexts:
             context["font_path"] = str(font_path)
-    prepared_subtitles = [
-        _prepare_subtitle(subtitle, style, str(font_path), width, height) for subtitle in subtitles
-    ]
+    prepared_subtitles = {
+        subtitle["id"]: _prepare_subtitle(subtitle, style, str(font_path), width, height)
+        for subtitle in subtitles
+    }
     requests = _keyframe_requests(shots, keyframes)
     keyframe_files: list[str] = []
     black_threshold = float(style.get("qc", {}).get("black_frame_mean_luma", 8.0))
@@ -1792,21 +2099,23 @@ def render_video(
     current_shot_index = -1
     previous_shot_image: Image.Image | None = None
     last_raw_image: Image.Image | None = None
+    last_low_array: np.ndarray | None = None
     try:
         with log_path.open("w", encoding="utf-8", newline="\n") as log_handle:
             for frame in range(frame_count):
-                shot_index = int(shot_for_frame[frame])
+                binding = bindings[frame]
+                shot_index = int(binding["shot_index"])
                 shot = shots[shot_index]
                 if shot_index != current_shot_index:
                     previous_shot_image = last_raw_image
                     current_shot_index = shot_index
-                local_frame = frame - int(shot["start_frame"])
+                local_frame = int(binding["local_frame"])
                 raw_low = _render_low_frame(shot, local_frame, style, contexts[shot_index])
                 transition_name = str(shot.get("transition_in", "hard_cut"))
                 transition_frames = max(0, int(shot.get("transition_frames", 0)))
-                transition_out_name = str(shot.get("transition_out", "hard_cut"))
-                transition_out_frames = max(0, int(shot.get("transition_out_frames", 0)))
-                transition_out_start = int(shot["end_frame"]) - int(shot["start_frame"]) - transition_out_frames
+                transition_out_name = str(shots[-1].get("transition_out", "hard_cut"))
+                transition_out_frames = max(0, int(shots[-1].get("transition_out_frames", 0)))
+                transition_out_start = frame_count - transition_out_frames
                 active_transition = None
                 low = raw_low
                 if local_frame < transition_frames and transition_name != "hard_cut":
@@ -1822,31 +2131,42 @@ def render_video(
                     active_transition = transition_name
                 elif local_frame == 0:
                     active_transition = "hard_cut"
-                if local_frame >= transition_out_start and transition_out_frames > 0 and transition_out_name != "hard_cut":
+                if frame >= transition_out_start and transition_out_frames > 0 and transition_out_name != "hard_cut":
                     low = _transition(
                         low,
                         Image.new("RGB", raw_low.size, (0, 0, 0)),
                         transition_out_name,
-                        (local_frame - transition_out_start + 1) / transition_out_frames,
+                        (frame - transition_out_start + 1) / transition_out_frames,
                         palette_image,
                     )
                     active_transition = transition_out_name
                 last_raw_image = raw_low
 
                 high = low.resize((width, height), Image.Resampling.NEAREST)
-                subtitle_index = int(subtitle_for_frame[frame])
-                subtitle_active = subtitle_index >= 0
-                subtitle_id = None
+                subtitle_id = binding["subtitle_id"]
+                subtitle_active = subtitle_id is not None
                 overflow = False
                 contrast = default_contrast
                 if subtitle_active:
-                    prepared = prepared_subtitles[subtitle_index]
+                    prepared = prepared_subtitles[subtitle_id]
                     _draw_subtitle(high, prepared)
-                    subtitle_id = subtitles[subtitle_index]["id"]
                     overflow = bool(prepared["overflow"])
                     contrast = float(prepared["contrast"])
 
                 low_array = np.asarray(low, dtype=np.uint8)
+                frame_difference = (
+                    0.0
+                    if last_low_array is None
+                    else float(
+                        np.mean(
+                            np.abs(
+                                low_array.astype(np.int16)
+                                - last_low_array.astype(np.int16)
+                            )
+                        )
+                    )
+                )
+                last_low_array = low_array
                 mean_luma = float(
                     np.mean(
                         low_array[..., 0].astype(np.float32) * 0.2126
@@ -1863,12 +2183,24 @@ def render_video(
                 record = {
                     "frame": frame,
                     "pts": frame / fps,
+                    "shot_index": shot_index,
                     "shot_id": shot["id"],
+                    "local_frame": local_frame,
                     "scene": shot.get("scene", "generic"),
+                    "visual_line_id": binding["visual_line_id"],
+                    "lyric_cue_id": binding["lyric_cue_id"],
+                    "lyric_line_id": binding["lyric_line_id"],
                     "subtitle_id": subtitle_id,
+                    "weather": binding["weather"],
+                    "weather_from": binding["weather_from"],
+                    "weather_transition": binding["weather_transition"],
+                    "weather_transition_stage": binding["weather_transition_stage"],
+                    "weather_transition_steps": binding["weather_transition_steps"],
+                    "weather_mix": binding["weather_mix"],
                     "transition": active_transition,
                     "mean_luma": round(mean_luma, 6),
                     "palette_size": palette_size,
+                    "frame_difference": round(frame_difference, 6),
                     "subtitle_active": subtitle_active,
                     "subtitle_overflow": overflow,
                     "contrast": round(float(contrast), 6),

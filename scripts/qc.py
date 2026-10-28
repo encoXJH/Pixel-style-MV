@@ -26,6 +26,8 @@ _REPORT_FLAGS = (
     "frame_integrity_pass",
     "subtitle_pass",
     "transition_pass",
+    "lyric_binding_pass",
+    "weather_pass",
 )
 
 
@@ -131,6 +133,21 @@ def validate_style_profile(timeline: dict[str, Any], style: dict[str, Any]) -> d
         "transition_definitions",
         all(shot.get("transition_in", "hard_cut") in transitions and shot.get("transition_out", "hard_cut") in transitions for shot in shots),
         "所有转场必须存在帧数与使用上限配置",
+    )
+    epilogue = [shot for shot in shots if shot.get("story_phase") == "epilogue"]
+    epilogue_signatures = {
+        (shot.get("scene"), shot.get("shot_type"), shot.get("action"), shot.get("blocking", {}).get("layout"), shot.get("weather"))
+        for shot in epilogue
+    }
+    check(
+        "epilogue_diversity",
+        len(epilogue) <= 2 or len(epilogue_signatures) >= min(3, len(epilogue)),
+        "三个及以上尾奏镜头不得只是同一场景、动作和构图的复制",
+    )
+    check(
+        "montage_line_binding",
+        all(shot.get("line_id") is None for shot in shots if shot.get("kind") in ("instrumental", "epilogue")),
+        "间奏和尾奏不得残留上一句歌词的视觉 line_id",
     )
     opening = next((shot for shot in shots if shot.get("story_phase") == "prologue"), None)
     ending = next((shot for shot in reversed(shots) if shot.get("story_phase") == "epilogue"), None)
@@ -510,6 +527,150 @@ def _row_subtitle_ids(row: dict[str, Any]) -> tuple[set[str], bool]:
     return set(), False
 
 
+def _validate_lyric_binding_timeline(
+    timeline: dict[str, Any],
+    fps: float,
+    frame_count: int,
+    report: _Report,
+) -> dict[str, Any]:
+    cues = timeline.get("lyric_cues")
+    subtitles = _subtitles(timeline)
+    shots = _shots(timeline)
+    metrics: dict[str, Any] = {
+        "active_lyric_frame_count": 0,
+        "matched_lyric_frame_count": 0,
+        "lyric_binding_mismatch_count": 0,
+        "lyric_frame_match_ratio": 0.0,
+    }
+    if not isinstance(cues, list) or not cues or len(cues) != len(subtitles):
+        report.error("lyric_cues 必须与字幕逐句一一对应", "lyric_binding_pass", "timeline_sync_pass")
+        return metrics
+    sync = timeline.get("sync")
+    expected_sync = {
+        "frame_clock": "shared_lyric_cue_v1",
+        "interval": "left_closed_right_open",
+        "quantization": "ceil_target_seconds_times_fps",
+        "independent_shot_snap": False,
+        "human_vocal_sync": "unverified",
+    }
+    if not isinstance(sync, dict) or any(sync.get(key) != value for key, value in expected_sync.items()):
+        report.error("sync 未声明统一歌词帧时钟或真人声同步边界", "lyric_binding_pass", "timeline_sync_pass")
+
+    shot_map = _shot_frame_map(timeline, frame_count) if frame_count else []
+    shot_by_id = {_shot_id(shot, index): shot for index, shot in enumerate(shots)}
+    previous_start = -1
+    for index, cue in enumerate(cues):
+        if not isinstance(cue, dict):
+            report.error(f"歌词 cue {index} 不是对象", "lyric_binding_pass")
+            continue
+        cue_id = str(cue.get("id", f"lyric_{index:04d}"))
+        subtitle = subtitles[index]
+        start, end = _actual_frame(cue, "start"), _actual_frame(cue, "end")
+        target_start = _target_seconds(cue, "start", fps)
+        target_end = _target_seconds(cue, "end", fps)
+        if start is None or end is None or target_start is None or target_end is None:
+            report.error(f"歌词 cue {cue_id} 缺少目标时间或实际帧区间", "lyric_binding_pass")
+            continue
+        expected_start = min(frame_count, max(0, math.ceil(target_start * fps)))
+        expected_end = min(frame_count, max(0, math.ceil(target_end * fps)))
+        if (
+            start <= previous_start
+            or end <= start
+            or end > frame_count
+            or (start, end) != (expected_start, expected_end)
+        ):
+            report.error(f"歌词 cue {cue_id} 未统一使用 ceil(target×fps) 或帧区间无效", "lyric_binding_pass", "timeline_sync_pass")
+        previous_start = start
+        expected_ids = (f"lyric_{index:04d}", f"subtitle_{index:04d}")
+        if (cue.get("id"), cue.get("subtitle_id")) != expected_ids:
+            report.error(f"歌词 cue {index} 的稳定 ID 或字幕引用无效", "lyric_binding_pass")
+        if not isinstance(subtitle, dict):
+            report.error(f"字幕 {index} 不是对象", "lyric_binding_pass", "subtitle_pass")
+            continue
+        shared_fields = ("line_id", "text", "target_start", "target_end", "start", "end", "start_frame", "end_frame")
+        if (
+            subtitle.get("id") != cue.get("subtitle_id")
+            or subtitle.get("cue_id") != cue.get("id")
+            or any(subtitle.get(field) != cue.get(field) for field in shared_fields)
+        ):
+            report.error(f"字幕 {index} 与唯一歌词 cue 的内容或时间不一致", "lyric_binding_pass", "subtitle_pass")
+        shot_ids = cue.get("shot_ids")
+        if not isinstance(shot_ids, list) or not shot_ids:
+            report.error(f"歌词 cue {cue_id} 没有对应叙事镜头", "lyric_binding_pass")
+            continue
+        if any(str(shot_id) not in shot_by_id for shot_id in shot_ids):
+            report.error(f"歌词 cue {cue_id} 引用了不存在的镜头", "lyric_binding_pass")
+            continue
+        first_shot = shot_by_id[str(shot_ids[0])]
+        first_start, _ = _shot_frames(first_shot)
+        if first_start != start:
+            report.error(f"歌词 cue {cue_id} 的首镜头未从同一帧开始", "lyric_binding_pass", "timeline_sync_pass")
+
+        mismatch = 0
+        for frame in range(max(0, start), min(frame_count, end)):
+            metrics["active_lyric_frame_count"] += 1
+            expected = shot_map[frame] if shot_map else None
+            shot = shots[expected[0]] if expected is not None else None
+            valid = bool(
+                shot is not None
+                and expected[1] in {str(value) for value in shot_ids}
+                and shot.get("line_id") == cue.get("line_id")
+                and shot.get("lyric_cue_id") == cue.get("id")
+            )
+            if valid:
+                metrics["matched_lyric_frame_count"] += 1
+            else:
+                mismatch += 1
+        if mismatch:
+            metrics["lyric_binding_mismatch_count"] += mismatch
+            report.error(
+                f"歌词 cue {cue_id} 有 {mismatch} 个活动帧未绑定到同一句叙事镜头",
+                "lyric_binding_pass",
+                "timeline_sync_pass",
+            )
+    active = metrics["active_lyric_frame_count"]
+    metrics["lyric_frame_match_ratio"] = metrics["matched_lyric_frame_count"] / active if active else 0.0
+    if active == 0:
+        report.error("时间轴没有可验证的活动歌词帧", "lyric_binding_pass")
+    return metrics
+
+
+def _validate_weather_timeline(timeline: dict[str, Any], report: _Report) -> dict[str, int]:
+    allowed = {"day", "cloudy", "rain", "snow", "night", "sunset"}
+    transition_shots = 0
+    transition_frames = 0
+    for index, shot in enumerate(_shots(timeline)):
+        if not isinstance(shot, dict):
+            continue
+        weather = shot.get("weather", "day")
+        source = shot.get("weather_from")
+        if weather not in allowed or (source is not None and source not in allowed):
+            report.error(f"镜头 {_shot_id(shot, index)} 使用未知天气状态", "weather_pass")
+        start, end = _shot_frames(shot)
+        length = end - start if start is not None and end is not None else 0
+        frames = _integer(shot.get("weather_transition_frames", 0))
+        steps = _integer(shot.get("weather_transition_steps", 5))
+        if frames is None or frames < 0 or frames > length or steps is None or steps < 1:
+            report.error(f"镜头 {_shot_id(shot, index)} 的天气过渡帧数或阶段数无效", "weather_pass")
+            continue
+        if frames and (
+            source is None
+            or source == weather
+            or shot.get("compare_weather")
+        ):
+            report.error(f"镜头 {_shot_id(shot, index)} 的天气过渡起止状态无效", "weather_pass")
+            continue
+        if frames:
+            transition_shots += 1
+            transition_frames += frames
+        if shot.get("beat_snap_applied") or (_number(shot.get("beat_snap_ms", 0.0)) or 0.0) != 0.0:
+            report.error(f"镜头 {_shot_id(shot, index)} 不得独立吸附歌词句界", "lyric_binding_pass", "timeline_sync_pass")
+    return {
+        "weather_transition_shot_count": transition_shots,
+        "weather_transition_frame_count": transition_frames,
+    }
+
+
 def validate_timeline(timeline: dict[str, Any], style: dict[str, Any]) -> dict[str, Any]:
     """验证内部时间轴；所有帧区间均按左闭右开处理。"""
     report = _Report()
@@ -630,6 +791,9 @@ def validate_timeline(timeline: dict[str, Any], style: dict[str, Any]) -> dict[s
                     "subtitle_pass",
                 )
 
+    lyric_metrics = _validate_lyric_binding_timeline(timeline, fps, frame_count, report)
+    weather_metrics = _validate_weather_timeline(timeline, report)
+
     transitions = _transition_schedule(timeline, style, frame_count, report)
     transition_counts: dict[str, int] = {}
     for entry in transitions:
@@ -646,6 +810,8 @@ def validate_timeline(timeline: dict[str, Any], style: dict[str, Any]) -> dict[s
             "max_subtitle_error_ms": max(subtitle_errors, default=0.0),
             "max_timeline_error_ms": max(all_errors, default=0.0),
             "transition_counts": transition_counts,
+            **lyric_metrics,
+            **weather_metrics,
         }
     )
     return report.result()
@@ -677,6 +843,33 @@ def validate_frames_log(
 
     shot_map = _shot_frame_map(timeline, frame_count) if frame_count else []
     subtitle_map = _active_subtitle_map(timeline, frame_count) if frame_count else []
+    cue_map: list[dict[str, Any] | None] = [None] * frame_count
+    raw_cues = timeline.get("lyric_cues")
+    if isinstance(raw_cues, list):
+        for cue in raw_cues:
+            if not isinstance(cue, dict):
+                continue
+            start, end = _actual_frame(cue, "start"), _actual_frame(cue, "end")
+            if start is None or end is None:
+                continue
+            for frame in range(max(0, start), min(frame_count, end)):
+                cue_map[frame] = cue
+    expected_active_lyric_frames = sum(cue is not None for cue in cue_map)
+    expected_weather_transition_frames = 0
+    for shot in _shots(timeline):
+        if not isinstance(shot, dict):
+            continue
+        start, end = _shot_frames(shot)
+        frames = _integer(shot.get("weather_transition_frames", 0)) or 0
+        source = shot.get("weather_from")
+        if (
+            start is not None
+            and end is not None
+            and source
+            and source != shot.get("weather", "day")
+            and not shot.get("compare_weather")
+        ):
+            expected_weather_transition_frames += min(frames, max(0, end - start))
     transitions = _transition_schedule(timeline, style, frame_count)
     transition_map = _transition_frame_map(transitions, frame_count) if frame_count else []
     transition_types = set((style.get("transitions") or {}).keys())
@@ -697,6 +890,13 @@ def validate_frames_log(
     non_monotonic_pts = 0
     shot_mismatch_count = 0
     subtitle_mismatch_count = 0
+    lyric_binding_mismatch_count = 0
+    matched_lyric_frames = 0
+    seen_active_lyric_frames = 0
+    weather_binding_mismatch_count = 0
+    matched_weather_frames = 0
+    matched_weather_transition_frames = 0
+    seen_weather_transition_frames = 0
     overflow_count = 0
     low_contrast_count = 0
     missing_contrast_count = 0
@@ -808,6 +1008,83 @@ def validate_frames_log(
                 if not subtitle_field_present or actual_subtitles != expected_subtitles:
                     subtitle_mismatch_count += 1
 
+                if not duplicate:
+                    shots = _shots(timeline)
+                    shot = shots[expected_shot[0]] if expected_shot is not None else None
+                    cue = cue_map[frame]
+                    shot_start, _ = _shot_frames(shot) if shot is not None else (None, None)
+                    local_frame = frame - shot_start if shot_start is not None else None
+                    binding_fields = (
+                        "visual_line_id",
+                        "lyric_cue_id",
+                        "lyric_line_id",
+                        "subtitle_id",
+                        "local_frame",
+                    )
+                    expected_binding = {
+                        "visual_line_id": shot.get("line_id") if shot is not None else None,
+                        "lyric_cue_id": cue.get("id") if cue is not None else None,
+                        "lyric_line_id": cue.get("line_id") if cue is not None else None,
+                        "subtitle_id": cue.get("subtitle_id") if cue is not None else None,
+                        "local_frame": local_frame,
+                    }
+                    binding_valid = all(field in row for field in binding_fields) and all(
+                        row.get(field) == value for field, value in expected_binding.items()
+                    )
+                    if cue is not None:
+                        seen_active_lyric_frames += 1
+                        if binding_valid:
+                            matched_lyric_frames += 1
+                        else:
+                            lyric_binding_mismatch_count += 1
+                    elif not binding_valid:
+                        lyric_binding_mismatch_count += 1
+
+                    weather_fields = (
+                        "weather",
+                        "weather_from",
+                        "weather_transition",
+                        "weather_transition_stage",
+                        "weather_transition_steps",
+                        "weather_mix",
+                    )
+                    target_weather = shot.get("weather", "day") if shot is not None else None
+                    source_weather = shot.get("weather_from") if shot is not None else None
+                    weather_frames = _integer(shot.get("weather_transition_frames", 0)) or 0 if shot is not None else 0
+                    weather_steps = max(1, _integer(shot.get("weather_transition_steps", 5)) or 5) if shot is not None else 5
+                    weather_active = bool(
+                        source_weather
+                        and source_weather != target_weather
+                        and not shot.get("compare_weather")
+                        and local_frame is not None
+                        and 0 <= local_frame < weather_frames
+                    ) if shot is not None else False
+                    weather_stage = (
+                        min(weather_steps - 1, int(local_frame * weather_steps / weather_frames))
+                        if weather_active
+                        else weather_steps
+                    )
+                    weather_amount = (weather_stage + 1) / weather_steps if weather_active else 1.0
+                    actual_weather_amount = _number(row.get("weather_mix"))
+                    weather_valid = (
+                        all(field in row for field in weather_fields)
+                        and row.get("weather") == target_weather
+                        and row.get("weather_from") == source_weather
+                        and _boolean(row.get("weather_transition")) is weather_active
+                        and _integer(row.get("weather_transition_stage")) == weather_stage
+                        and _integer(row.get("weather_transition_steps")) == weather_steps
+                        and actual_weather_amount is not None
+                        and abs(actual_weather_amount - weather_amount) <= 1e-6
+                    )
+                    if weather_valid:
+                        matched_weather_frames += 1
+                        if weather_active:
+                            matched_weather_transition_frames += 1
+                    else:
+                        weather_binding_mismatch_count += 1
+                    if weather_active:
+                        seen_weather_transition_frames += 1
+
                 overflow = _deep_pick(row, "subtitle_overflow", "subtitle_overflow_pixels", "overflow")
                 overflow_bool = _boolean(overflow)
                 overflow_number = _number(overflow)
@@ -886,6 +1163,8 @@ def validate_frames_log(
             else:
                 freeze_run = 0
 
+    lyric_binding_mismatch_count += max(0, expected_active_lyric_frames - seen_active_lyric_frames)
+    weather_binding_mismatch_count += max(0, frame_count - matched_weather_frames - weather_binding_mismatch_count)
     if row_count == 0:
         report.error("frames.jsonl 没有帧记录", "frame_integrity_pass")
     if frame_count:
@@ -921,6 +1200,19 @@ def validate_frames_log(
         report.error(f"有 {shot_mismatch_count} 帧的镜头映射与时间轴不一致", "frame_integrity_pass")
     if subtitle_mismatch_count:
         report.error(f"有 {subtitle_mismatch_count} 帧的字幕映射与时间轴不一致", "subtitle_pass")
+    if lyric_binding_mismatch_count:
+        report.error(
+            f"有 {lyric_binding_mismatch_count} 帧的歌词 cue—镜头—字幕绑定缺失或不一致",
+            "lyric_binding_pass",
+            "timeline_sync_pass",
+        )
+    if not expected_active_lyric_frames:
+        report.error("frames.jsonl 没有可验证的活动歌词帧", "lyric_binding_pass")
+    if weather_binding_mismatch_count:
+        report.error(
+            f"有 {weather_binding_mismatch_count} 帧的天气状态或过渡阶段不一致",
+            "weather_pass",
+        )
     if overflow_count:
         report.error(f"有 {overflow_count} 个字幕活动帧发生 overflow", "subtitle_pass")
     if missing_contrast_count:
@@ -971,6 +1263,25 @@ def validate_frames_log(
             "max_timeline_error_ms": max_pts_error_ms,
             "min_subtitle_contrast": min_seen_contrast,
             "actual_transition_frame_counts": actual_transition_counts,
+            "active_lyric_frame_count": expected_active_lyric_frames,
+            "logged_active_lyric_frame_count": seen_active_lyric_frames,
+            "matched_lyric_frame_count": matched_lyric_frames,
+            "lyric_binding_mismatch_count": lyric_binding_mismatch_count,
+            "lyric_frame_match_ratio": (
+                matched_lyric_frames / expected_active_lyric_frames
+                if expected_active_lyric_frames
+                else 0.0
+            ),
+            "weather_transition_frame_count": expected_weather_transition_frames,
+            "logged_weather_transition_frame_count": seen_weather_transition_frames,
+            "matched_weather_transition_frame_count": matched_weather_transition_frames,
+            "weather_binding_mismatch_count": weather_binding_mismatch_count,
+            "weather_frame_match_ratio": matched_weather_frames / frame_count if frame_count else 0.0,
+            "weather_transition_match_ratio": (
+                matched_weather_transition_frames / expected_weather_transition_frames
+                if expected_weather_transition_frames
+                else 1.0
+            ),
         }
     )
     return report.result()

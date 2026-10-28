@@ -38,9 +38,9 @@ def _lyrics(value: str | None) -> list[str]:
 
 def preview_timeline(lines: list[str], style: dict) -> dict:
     """Build an explicitly estimated timeline for art review, without audio."""
-    lead = 0.8
+    lead = 9.0
     line_step = 3.2
-    duration = lead + len(lines) * line_step + 1.6
+    duration = lead + len(lines) * line_step + 28.8
     aligned_lines = []
     for index, text in enumerate(lines):
         start = lead + index * line_step
@@ -67,6 +67,8 @@ def preview_timeline(lines: list[str], style: dict) -> dict:
         "onsets": [],
         "rms_times": [index * 0.5 for index in range(int(duration * 2) + 1)],
         "rms": [0.45 + 0.25 * math.sin(index * 0.7) for index in range(int(duration * 2) + 1)],
+        "title": "像素叙事 · 美术预览",
+        "artist": "原创程序化画面",
     }
     return render.plan_timeline(alignment, features, style)
 
@@ -75,19 +77,39 @@ def _selected_shots(shots: list[dict]) -> list[dict]:
     if len(shots) <= 12:
         return list(shots)
     selected: list[dict] = []
-    for shot in shots:
-        if shot.get("story_phase") in ("prologue", "epilogue") or shot.get("action") in ("embrace", "heart_glass", "cycling", "reading") or set(shot.get("effects", [])) & {"thought_bubble", "fireworks", "photo_frame"}:
-            if shot not in selected:
-                selected.append(shot)
+
+    def add(shot: dict) -> None:
+        if len(selected) < 12 and shot not in selected:
+            selected.append(shot)
+
+    add(shots[0])
+    add(shots[-1])
+    selectors = (
+        lambda shot: shot.get("scene") == "train_interior",
+        lambda shot: shot.get("action") == "embrace",
+        lambda shot: shot.get("action") == "heart_glass",
+        lambda shot: shot.get("action") == "cycling",
+        lambda shot: shot.get("action") == "reading",
+        lambda shot: shot.get("blocking", {}).get("layout") == "dual_portrait",
+        lambda shot: shot.get("blocking", {}).get("layout") == "bench_pair",
+        lambda shot: "photo_frame" in shot.get("effects", []),
+        lambda shot: "fireworks" in shot.get("effects", []),
+        lambda shot: "thought_bubble" in shot.get("effects", []),
+    )
+    for selector in selectors:
+        candidate = next((shot for shot in shots if shot not in selected and selector(shot)), None)
+        if candidate is not None:
+            add(candidate)
     for shot in shots:
         if len(selected) >= 12:
             break
-        if shot not in selected:
-            selected.append(shot)
+        if shot["scene"] not in {item["scene"] for item in selected} or shot["action"] not in {item["action"] for item in selected}:
+            add(shot)
+    for shot in shots:
+        if len(selected) >= 12:
+            break
+        add(shot)
     selected.sort(key=lambda shot: int(shot["start_frame"]))
-    if len(selected) > 12:
-        indices = sorted({round(index * (len(selected) - 1) / 11) for index in range(12)})
-        selected = [selected[index] for index in indices]
     return selected
 
 
@@ -110,7 +132,7 @@ def _sequence_sheet(groups: list[tuple[str, list[Image.Image]]], path: Path, fon
 def _motion_previews(timeline: dict, style: dict, output: Path, font_path: str) -> tuple[list[dict], list[tuple[str, list[Image.Image]]]]:
     shots = [
         shot for shot in timeline["shots"]
-        if shot.get("action") in ("train", "walking", "cycling", "embrace", "heart_glass", "playing")
+        if shot.get("action") in ("title_board", "train", "walking", "cycling", "embrace", "heart_glass", "playing")
         or shot.get("camera", {}).get("kind") != "static"
         or set(shot.get("effects", [])) & {"fireworks", "pixel_hearts"}
     ]
@@ -196,6 +218,77 @@ def _transition_previews(timeline: dict, style: dict, output: Path, font_path: s
     return records, groups
 
 
+def _weather_previews(timeline: dict, style: dict, output: Path, font_path: str) -> tuple[list[dict], list[dict]]:
+    base = dict(next(
+        shot for shot in timeline["shots"]
+        if shot.get("scene") in ("station", "seaside", "campus", "highway")
+    ))
+    base.update(
+        scene="station",
+        shot_type="wide",
+        action="waiting",
+        characters=["protagonist"],
+        compare_weather=None,
+        story_phase="development",
+        effects=[],
+        camera={"kind": "static", "max_crop_pixels": 0, "pan_pixels": 0, "hold_frames": 2},
+    )
+    states = ("day", "cloudy", "rain", "snow", "sunset", "night")
+    stable_records = []
+    stable_groups = []
+    for weather in states:
+        shot = dict(base)
+        shot.update(id=f"weather_{weather}", weather=weather, weather_from=None, weather_transition_frames=0)
+        context = render._shot_context(shot, style)
+        context["font_path"] = font_path
+        directory = output / "weather" / weather
+        directory.mkdir(parents=True, exist_ok=True)
+        files = []
+        images = []
+        for index, local_frame in enumerate((0, 8, 16)):
+            image = render._render_low_frame(shot, local_frame, style, context)
+            filename = f"{index:02d}_f{local_frame:04d}.png"
+            image.save(directory / filename)
+            files.append(f"weather/{weather}/{filename}")
+            images.append(image)
+        stable_groups.append((weather, images))
+        stable_records.append({"weather": weather, "files": files})
+    _sequence_sheet(stable_groups, output / "weather-contact-sheet.jpg", font_path)
+
+    transition_records = []
+    transition_groups = []
+    pairs = (("day", "cloudy"), ("cloudy", "rain"), ("rain", "snow"), ("snow", "sunset"), ("sunset", "night"))
+    for source, target in pairs:
+        shot = dict(base)
+        shot.update(
+            id=f"weather_{source}_to_{target}",
+            weather=target,
+            weather_from=source,
+            weather_transition_frames=15,
+            weather_transition_steps=5,
+        )
+        context = render._shot_context(shot, style)
+        context["font_path"] = font_path
+        directory = output / "weather" / "transitions" / f"{source}_to_{target}"
+        directory.mkdir(parents=True, exist_ok=True)
+        files = []
+        images = []
+        stages = []
+        for index, local_frame in enumerate((0, 3, 6, 9, 12, 14, 15)):
+            image = render._render_low_frame(shot, local_frame, style, context)
+            filename = f"{index:02d}_f{local_frame:04d}.png"
+            image.save(directory / filename)
+            files.append(f"weather/transitions/{source}_to_{target}/{filename}")
+            images.append(image)
+            state = render.art.weather_state(shot, local_frame)
+            stages.append({"local_frame": local_frame, **state})
+        label = f"{source} -> {target} / ordered pixels"
+        transition_groups.append((label, images))
+        transition_records.append({"from": source, "to": target, "files": files, "stages": stages})
+    _sequence_sheet(transition_groups, output / "weather-transition-contact-sheet.jpg", font_path)
+    return stable_records, transition_records
+
+
 def generate_preview(lines: list[str], style: dict, output_dir: str | Path) -> dict:
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -263,11 +356,12 @@ def generate_preview(lines: list[str], style: dict, output_dir: str | Path) -> d
     _sequence_sheet(motion_groups, output / "motion-contact-sheet.jpg", font_path)
     transition_records, transition_groups = _transition_previews(timeline, style, output, font_path)
     _sequence_sheet(transition_groups, output / "transition-contact-sheet.jpg", font_path)
+    weather_records, weather_transition_records = _weather_previews(timeline, style, output, font_path)
     style_report = qc.validate_style_profile(timeline, style)
     (output / "style-qc.json").write_text(json.dumps(style_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "preview_only": True,
         "purpose": "art_and_composition_review",
         "timing_status": "estimated_equal_duration",
@@ -280,8 +374,10 @@ def generate_preview(lines: list[str], style: dict, output_dir: str | Path) -> d
         "frames": records,
         "motion_sequences": motion_records,
         "transition_sequences": transition_records,
+        "weather_sequences": weather_records,
+        "weather_transition_sequences": weather_transition_records,
         "style_qc": style_report,
-        "review_required": ["character_consistency", "action_readability", "transition_continuity", "subtitle_clearance", "density_balance"],
+        "review_required": ["character_consistency", "expression_and_action_readability", "semantic_scene_fit", "shot_diversity", "epilogue_montage", "transition_continuity", "weather_transition_continuity", "subtitle_clearance", "density_balance"],
     }
     (output / "preview.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"output_dir": str(output), "frame_count": len(records), "manifest": manifest}
